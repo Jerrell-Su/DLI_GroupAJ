@@ -192,72 +192,83 @@ elif input_method == "Batch Prediction":
         if st.button("Run Batch Prediction"):
             if model is not None:
                 try:
-                    # Check feature count
-                    expected_features = 30  # Your model expects 30 features
-                    if len(features_df.columns) != expected_features:
-                        st.error(f"❌ Feature count mismatch! Model expects {expected_features} features, got {len(features_df.columns)}")
-                        st.write("Expected features for your model:")
-                        expected_feature_names = [
-                            "url_length", "domain_age", "subdomain_count", "special_chars",
-                            "https_usage", "google_index", "page_rank", "domain_registration_length",
-                            "suspicious_keywords", "dots_count", "hyphens_count", "underscores_count",
-                            "slashes_count", "question_marks", "equal_signs", "at_symbols",
-                            "ampersands", "percent_signs", "hash_signs", "digits_count",
-                            "letters_count", "alexa_rank", "domain_trust", "ssl_certificate",
-                            "redirects_count", "page_load_time", "has_forms", "hidden_elements",
-                            "external_links_ratio", "image_text_ratio"
-                        ]
-                        st.write(expected_feature_names)
-                        return
-                    
-                    # Scale features if scaler is available and not default
-                    if hasattr(scaler, 'scale_') and scaler.scale_ is not None:
+                    # exact feature list used during training
+                    expected_feature_names = [
+                        "url_length", "domain_age", "subdomain_count", "special_chars",
+                        "https_usage", "google_index", "page_rank", "domain_registration_length",
+                        "suspicious_keywords", "dots_count", "hyphens_count", "underscores_count",
+                        "slashes_count", "question_marks", "equal_signs", "at_symbols",
+                        "ampersands", "percent_signs", "hash_signs", "digits_count",
+                        "letters_count", "alexa_rank", "domain_trust", "ssl_certificate",
+                        "redirects_count", "page_load_time", "has_forms", "hidden_elements",
+                        "external_links_ratio", "image_text_ratio"
+                    ]
+
+                    # drop any target-like columns robustly
+                    drop_candidates = [c for c in df.columns if c.strip().lower() in {"class","label","target","y"}]
+                    features_df = df.drop(columns=drop_candidates, errors="ignore")
+
+                    # require exact match of names and order
+                    missing = [c for c in expected_feature_names if c not in features_df.columns]
+                    extra = [c for c in features_df.columns if c not in expected_feature_names]
+                    if missing or extra:
+                        st.error("❌ Columns mismatch")
+                        st.write({"missing": missing, "extra": extra})
+                        st.stop()
+
+                    # reorder and keep only expected columns
+                    features_df = features_df[expected_feature_names]
+
+                    # ensure numeric
+                    features_df = features_df.apply(pd.to_numeric, errors="coerce")
+                    if features_df.isna().any().any():
+                        st.error("❌ Non-numeric values detected after coercion")
+                        st.write(features_df.isna().sum())
+                        st.stop()
+
+                    # scale if scaler provided
+                    try:
                         features_scaled = scaler.transform(features_df)
                         st.success("✅ Features scaled using loaded scaler")
-                    else:
-                        features_scaled = features_df.values
-                        st.info("ℹ️ Using raw features (no scaling)")
-                    
-                    # Make predictions
+                    except Exception as e:
+                        # fall back to numpy if the scaler was fit without feature names
+                        features_scaled = features_df.to_numpy()
+                        st.info(f"ℹ️ Using raw features (scaler not applied): {e}")
+
+                    # predict
                     predictions = model.predict(features_scaled)
                     probabilities = model.predict_proba(features_scaled)
-                    
-                    # Create results dataframe
-                    results_df = df.copy() if 'class' in df.columns else features_df.copy()
+
+                    # assemble results
+                    results_df = df.copy()
                     results_df['Prediction'] = predictions
                     results_df['Legitimate_Prob'] = probabilities[:, 0]
                     results_df['Phishing_Prob'] = probabilities[:, 1]
                     results_df['Status'] = results_df['Prediction'].map({0: 'Legitimate', 1: 'Phishing'})
-                    
-                    st.success("✅ Batch prediction completed!")
-                    
-                    # Show summary
+
+                    st.success("✅ Batch prediction completed")
+
                     st.subheader("📊 Prediction Summary")
                     col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total URLs", len(results_df))
-                    with col2:
-                        legitimate_count = (predictions == 0).sum()
-                        st.metric("Legitimate", legitimate_count)
-                    with col3:
-                        phishing_count = (predictions == 1).sum()
-                        st.metric("Phishing", phishing_count)
-                    
-                    # Show results
-                    st.subheader("🔍 Detailed Results")
+                    with col1: st.metric("Total URLs", len(results_df))
+                    with col2: st.metric("Legitimate", int((predictions == 0).sum()))
+                    with col3: st.metric("Phishing", int((predictions == 1).sum()))
+
                     display_columns = ['Status', 'Legitimate_Prob', 'Phishing_Prob']
-                    if 'class' in df.columns:
-                        display_columns.insert(0, 'class')  # Show actual class if available
-                        
+                    target_cols_present = [c for c in drop_candidates if c in df.columns]
+                    if target_cols_present:
+                        display_columns = target_cols_present + display_columns
+
+                    st.subheader("🔍 Detailed Results")
                     st.dataframe(results_df[display_columns])
-                    
-                    # If actual class exists, show accuracy
-                    if 'class' in df.columns:
-                        actual = df['class'].values
-                        accuracy = (predictions == actual).mean()
-                        st.success(f"🎯 **Accuracy on uploaded data: {accuracy:.1%}**")
-                    
-                    # Download results
+
+                    # accuracy if target present
+                    for tcol in target_cols_present:
+                        if set(df[tcol].unique()) <= {0,1}:
+                            accuracy = (predictions == df[tcol].values).mean()
+                            st.success(f"🎯 Accuracy vs '{tcol}': {accuracy:.1%}")
+                            break
+
                     csv = results_df.to_csv(index=False)
                     st.download_button(
                         label="📥 Download Results CSV",
@@ -265,14 +276,14 @@ elif input_method == "Batch Prediction":
                         file_name="phishing_predictions.csv",
                         mime="text/csv"
                     )
-                    
+
                 except Exception as e:
                     st.error(f"❌ Error in batch prediction: {e}")
-                    st.write("**Troubleshooting tips:**")
-                    st.write("1. Make sure your CSV has exactly 30 feature columns")
-                    st.write("2. Remove the 'class' column if it exists")
-                    st.write("3. Check that column names match expected features")
-                    st.write("4. Ensure all values are numeric")
+                    st.write("**Troubleshooting:**")
+                    st.write("1) Headers must exactly match expected_feature_names.")
+                    st.write("2) Remove any target column (class/label/target).")
+                    st.write("3) All values must be numeric.")
+                    st.write("4) Scaler and model must be from the same training pipeline.")
 
 # Footer
 st.markdown("---")
