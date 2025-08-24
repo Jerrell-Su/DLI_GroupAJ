@@ -5,3 +5,8 @@ scikit-learn
 joblib
 matplotlib
 seaborn
+tensorflow
+keras
+xgboost
+lightgbm
+catboost
