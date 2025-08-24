@@ -134,19 +134,6 @@ if input_method == "Manual Feature Input":
         feat28 = st.selectbox("Has Hidden Elements", [0, 1], format_func=lambda x: "Yes" if x else "No")
         feat29 = st.slider("External Links Ratio", 0.0, 1.0, 0.3)
         feat30 = st.slider("Image to Text Ratio", 0.0, 1.0, 0.5)
-    
-    # Prediction button
-    # --- single source of truth for training columns
-    EXPECTED = [
-        "url_length", "domain_age", "subdomain_count", "special_chars",
-        "https_usage", "google_index", "page_rank", "domain_registration_length",
-        "suspicious_keywords", "dots_count", "hyphens_count", "underscores_count",
-        "slashes_count", "question_marks", "equal_signs", "at_symbols",
-        "ampersands", "percent_signs", "hash_signs", "digits_count",
-        "letters_count", "alexa_rank", "domain_trust", "ssl_certificate",
-        "redirects_count", "page_load_time", "has_forms", "hidden_elements",
-        "external_links_ratio", "image_text_ratio"
-    ]
 
     def _manual_row():
         return [
@@ -234,16 +221,7 @@ elif input_method == "Batch Prediction":
             if model is not None:
                 try:
                     # exact feature list used during training
-                    expected_feature_names = [
-                        "url_length", "domain_age", "subdomain_count", "special_chars",
-                        "https_usage", "google_index", "page_rank", "domain_registration_length",
-                        "suspicious_keywords", "dots_count", "hyphens_count", "underscores_count",
-                        "slashes_count", "question_marks", "equal_signs", "at_symbols",
-                        "ampersands", "percent_signs", "hash_signs", "digits_count",
-                        "letters_count", "alexa_rank", "domain_trust", "ssl_certificate",
-                        "redirects_count", "page_load_time", "has_forms", "hidden_elements",
-                        "external_links_ratio", "image_text_ratio"
-                    ]
+                    expected_feature_names = EXPECTED
 
                     # drop any target-like columns robustly
                     drop_candidates = [c for c in df.columns if c.strip().lower() in {"class","label","target","y"}]
