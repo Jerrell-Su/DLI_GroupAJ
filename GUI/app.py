@@ -117,41 +117,78 @@ if input_method == "Manual Feature Input":
         feat30 = st.slider("Image to Text Ratio", 0.0, 1.0, 0.5)
     
     # Prediction button
+    # --- single source of truth for training columns
+    EXPECTED = [
+        "url_length", "domain_age", "subdomain_count", "special_chars",
+        "https_usage", "google_index", "page_rank", "domain_registration_length",
+        "suspicious_keywords", "dots_count", "hyphens_count", "underscores_count",
+        "slashes_count", "question_marks", "equal_signs", "at_symbols",
+        "ampersands", "percent_signs", "hash_signs", "digits_count",
+        "letters_count", "alexa_rank", "domain_trust", "ssl_certificate",
+        "redirects_count", "page_load_time", "has_forms", "hidden_elements",
+        "external_links_ratio", "image_text_ratio"
+    ]
+
+    def _manual_row():
+        return [
+            url_length, domain_age, subdomain_count, special_chars,
+            https_usage, google_index, page_rank, domain_registration_length,
+            feat9, feat10, feat11, feat12, feat13, feat14, feat15, feat16,
+            feat17, feat18, feat19, feat20, feat21, feat22, feat23, feat24,
+            feat25, feat26, feat27, feat28, feat29, feat30
+        ]
+
     if st.button("🔍 Analyze URL", type="primary"):
-        if model is not None:
-            # Create feature array with exactly 30 features
-            features = np.array([[
-                url_length, domain_age, subdomain_count, special_chars,
-                https_usage, google_index, page_rank, domain_registration_length,
-                feat9, feat10, feat11, feat12, feat13, feat14, feat15, feat16,
-                feat17, feat18, feat19, feat20, feat21, feat22, feat23, feat24,
-                feat25, feat26, feat27, feat28, feat29, feat30
-            ]])
-            
-            # Scale features if scaler is available
+        if model is None or scaler is None:
+            st.error("Model/scaler not loaded")
+        else:
             try:
-                features_scaled = scaler.transform(features)
-            except:
-                features_scaled = features
-            
-            # Make prediction
-            prediction = model.predict(features_scaled)[0]
-            prediction_proba = model.predict_proba(features_scaled)[0]
-            
-            # Display results
-            st.header("🎯 Prediction Results")
-            
-            if prediction == 1:  # Assuming 1 = phishing
-                st.error(f"⚠️ **PHISHING DETECTED** - Confidence: {prediction_proba[1]:.2%}")
-            else:
-                st.success(f"✅ **LEGITIMATE URL** - Confidence: {prediction_proba[0]:.2%}")
-            
-            # Show probability distribution
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Legitimate Probability", f"{prediction_proba[0]:.2%}")
-            with col2:
-                st.metric("Phishing Probability", f"{prediction_proba[1]:.2%}")
+                # assemble as DataFrame with training headers
+                X_df = pd.DataFrame([_manual_row()], columns=EXPECTED)
+
+                # optional sanity check vs model/scaler metadata
+                if hasattr(model, "n_features_in_") and model.n_features_in_ != len(EXPECTED):
+                    st.error(f"Model expects {getattr(model,'n_features_in_', None)} features, provided {len(EXPECTED)}")
+                    st.stop()
+                if hasattr(scaler, "feature_names_in_"):
+                    missing = [c for c in scaler.feature_names_in_ if c not in X_df.columns]
+                    extra = [c for c in X_df.columns if c not in scaler.feature_names_in_]
+                    if missing or extra:
+                        st.error(f"Feature name mismatch. missing={missing} extra={extra}")
+                        st.stop()
+
+                # numeric coercion guard
+                X_df = X_df.apply(pd.to_numeric, errors="coerce")
+                if X_df.isna().any().any():
+                    st.error("Non-numeric values after coercion")
+                    st.write(X_df.isna().sum())
+                    st.stop()
+
+                # scale with name-aware path, with safe fallback
+                try:
+                    X_scaled = scaler.transform(X_df)
+                except Exception:
+                    X_scaled = X_df.to_numpy()
+
+                # predict
+                proba = model.predict_proba(X_scaled)[0]
+                pred = int(np.argmax(proba))
+
+                st.header("🎯 Prediction Results")
+                if pred == 1:
+                    st.error(f"⚠️ PHISHING DETECTED - Confidence: {proba[1]:.2%}")
+                else:
+                    st.success(f"✅ LEGITIMATE URL - Confidence: {proba[0]:.2%}")
+
+                c1, c2 = st.columns(2)
+                with c1: st.metric("Legitimate Probability", f"{proba[0]:.2%}")
+                with c2: st.metric("Phishing Probability", f"{proba[1]:.2%}")
+
+            except Exception as e:
+                st.error(f"❌ Manual prediction error: {e}")
+                st.caption(f"Model n_features_in_: {getattr(model,'n_features_in_', 'unknown')}")
+                if hasattr(scaler, 'feature_names_in_'):
+                    st.caption(f"Scaler expects: {list(scaler.feature_names_in_)}")
 
 elif input_method == "URL Analysis":
     st.header("URL Analysis")
