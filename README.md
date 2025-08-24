@@ -1,6 +1,4 @@
-# DLI_GroupAJ
-
-# Phishing Detection GUI
+# DLI_GroupAJ (Phishing Detection GUI)
 
 ## Setup
 1. Install requirements: `pip install -r requirements.txt`
@@ -14,4 +12,5 @@
 
 ## Model Files Required
 - `../Main_Model/model.pkl` - Trained model
+
 - `../Main_Model/scaler.pkl` - Feature scaler
