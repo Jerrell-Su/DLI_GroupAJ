@@ -1,50 +1,45 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
 import joblib
+from pathlib import Path
+import pickle
 from sklearn.preprocessing import StandardScaler
 import warnings
-warnings.filterwarnings('ignore')
 
-# Page configuration
-st.set_page_config(
-    page_title="URL Phishing Detection",
-    page_icon="🔒",
-    layout="wide"
-)
+warnings.filterwarnings("ignore")
 
-# Title and description
-st.title("🔒 URL-Based Phishing Detection System")
-st.markdown("**Detect malicious URLs using machine learning**")
+@st.cache_resource
+def _find_file(name: str) -> Path | None:
+    here = Path(__file__).resolve().parent
+    cwd = Path.cwd()
+    candidates = [
+        here / "Main_Model" / name,
+        here / name,
+        cwd / "GUI" / "Main_Model" / name,
+        cwd / "Main_Model" / name,
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    st.write("Tried:", *map(str, candidates), sep="\n")
+    return None
 
-# Load your trained model (you'll need to save it first)
 @st.cache_resource
 def load_model():
-    try:
-        # Try different possible model file names with correct path
-        model = joblib.load('../Main_Model/model.pkl')  # Path to Main_Model folder
-        return model
-    except:
-        try:
-            model = joblib.load('./model.pkl')  # Try local folder
-            return model
-        except:
-            st.error("Model file not found. Please ensure 'model.pkl' is in Main_Model folder.")
-            return None
+    p = _find_file("model.pkl")
+    if p:
+        return joblib.load(p)
+    st.error("model.pkl not found")
+    return None
 
 @st.cache_resource
 def load_scaler():
-    try:
-        scaler = joblib.load('../Main_Model/scaler.pkl')  # Path to Main_Model folder
-        return scaler
-    except:
-        try:
-            scaler = joblib.load('./scaler.pkl')  # Try local folder
-            return scaler
-        except:
-            st.warning("Scaler not found. Using default StandardScaler.")
-            return StandardScaler()
+    p = _find_file("scaler.pkl")
+    if p:
+        return joblib.load(p)
+    st.warning("scaler.pkl not found. Using StandardScaler.")
+    return StandardScaler()
 
 # Load model and scaler
 model = load_model()
@@ -190,3 +185,4 @@ elif input_method == "Batch Prediction":
 st.markdown("---")
 
 st.markdown("Built by Group AJ 🎈 | Cybersecurity DLI Project")
+
