@@ -1,4 +1,4 @@
-# app.py
+# app.py — Streamlit UI for backup_model.pkl + scaler.pkl
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,12 +11,7 @@ warnings.filterwarnings("ignore")
 # -----------------------------------------------------------------------------
 # Page configuration
 # -----------------------------------------------------------------------------
-st.set_page_config(
-    page_title="URL Phishing Detection",
-    page_icon="🔒",
-    layout="wide",
-)
-
+st.set_page_config(page_title="URL Phishing Detection", page_icon="🔒", layout="wide")
 st.title("🔒 URL-Based Phishing Detection System")
 st.markdown("**Detect malicious URLs using machine learning**")
 
@@ -34,14 +29,14 @@ def _pick(*cands):
     return None
 
 # -----------------------------------------------------------------------------
-# Model + Scaler loaders
+# Load backup model (RandomForest on SCALED features) + external scaler
 # -----------------------------------------------------------------------------
 @st.cache_resource
 def load_model():
-    p = _pick(MODEL_DIR/"model.pkl", APP_DIR/"model.pkl", ROOT_DIR/"model.pkl")
+    p = _pick(MODEL_DIR/"backup_model.pkl", APP_DIR/"backup_model.pkl", ROOT_DIR/"backup_model.pkl")
     if not p:
-        st.error("model.pkl not found")
-        st.caption(f"Tried: {[str(x) for x in [MODEL_DIR/'model.pkl', APP_DIR/'model.pkl', ROOT_DIR/'model.pkl']]}")
+        st.error("backup_model.pkl not found")
+        st.caption(f"Tried: {[str(x) for x in [MODEL_DIR/'backup_model.pkl', APP_DIR/'backup_model.pkl', ROOT_DIR/'backup_model.pkl']]}")
         return None
     return joblib.load(p)
 
@@ -49,27 +44,25 @@ def load_model():
 def load_scaler():
     p = _pick(MODEL_DIR/"scaler.pkl", APP_DIR/"scaler.pkl", ROOT_DIR/"scaler.pkl")
     if not p:
-        # Only needed when the model has no internal scaler
-        st.caption("External scaler.pkl not found. If your model embeds its own scaler, this is fine.")
+        st.error("scaler.pkl not found (required for backup_model.pkl)")
         return None
     return joblib.load(p)
 
 model = load_model()
 scaler = load_scaler()
 
-def _uses_internal_scaler(m):
-    # Your UltimateOptimizedModel exposes both .scaler and .stacking_model
-    return hasattr(m, "scaler") and hasattr(m, "stacking_model")
+def _uses_internal_scaler(_):
+    # backup_model is a plain RF, so False
+    return False
 
 # -----------------------------------------------------------------------------
 # Canonical training feature names
+# Prefer scaler.feature_names_in_ to guarantee exact match for transform()
 # -----------------------------------------------------------------------------
-def _resolve_expected(model, scaler):
-    if hasattr(model, "feature_names_in_"):
-        return list(model.feature_names_in_)
+def _resolve_expected(scaler):
     if hasattr(scaler, "feature_names_in_"):
         return list(scaler.feature_names_in_)
-    # fallback: your manual list of 30 features
+    # fallback: manual list of 30 features (must match your training CSV headers)
     return [
         "url_length","domain_age","subdomain_count","special_chars",
         "https_usage","google_index","page_rank","domain_registration_length",
@@ -81,19 +74,12 @@ def _resolve_expected(model, scaler):
         "external_links_ratio","image_text_ratio"
     ]
 
-EXPECTED = _resolve_expected(model, scaler)
+EXPECTED = _resolve_expected(scaler)
 
-# OPTIONAL diagnostics
-st.caption(f"len(EXPECTED)={len(EXPECTED)}  EXPECTED={EXPECTED}")
-try:
-    base = getattr(model, "stacking_model", None)
-    if base and hasattr(base, "estimators_"):
-        ns = {name: getattr(est, "n_features_in_", None) for name, est in base.named_estimators_.items()}
-        st.caption(f"Base estimator feature counts: {ns}")
-except Exception:
-    pass
+# Diagnostics
+st.caption(f"len(EXPECTED)={len(EXPECTED)}")
 if hasattr(scaler, "feature_names_in_"):
-    st.caption(f"External scaler expects: {list(scaler.feature_names_in_)}")
+    st.caption(f"Scaler expects: {list(scaler.feature_names_in_)}")
 
 # -----------------------------------------------------------------------------
 # Sidebar
@@ -112,13 +98,11 @@ if input_method == "Manual Feature Input":
 
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("URL Structure Features")
         url_length = st.number_input("URL Length", min_value=0, max_value=1000, value=50)
         domain_age = st.number_input("Domain Age (days)", min_value=0, max_value=10000, value=365)
         subdomain_count = st.number_input("Subdomain Count", min_value=0, max_value=10, value=1)
         special_chars = st.number_input("Special Character Count", min_value=0, max_value=100, value=5)
     with col2:
-        st.subheader("Security Features")
         https_usage = st.selectbox("HTTPS Usage", [0, 1], format_func=lambda x: "Yes" if x else "No")
         google_index = st.selectbox("Google Indexed", [0, 1], format_func=lambda x: "Yes" if x else "No")
         page_rank = st.slider("Page Rank", 0.0, 10.0, 5.0)
@@ -162,29 +146,27 @@ if input_method == "Manual Feature Input":
         ]
 
     if st.button("🔍 Analyze URL", type="primary"):
-        if model is None:
-            st.error("Model not loaded"); st.stop()
+        if model is None or scaler is None:
+            st.error("Model or scaler not loaded"); st.stop()
 
         X_df = pd.DataFrame([_manual_row()], columns=EXPECTED)
         X_df = X_df.apply(pd.to_numeric, errors="coerce")
         if X_df.isna().any().any():
-            st.error("Non-numeric inputs detected")
-            st.write(X_df.isna().sum()); st.stop()
+            st.error("Non-numeric inputs detected"); st.write(X_df.isna().sum()); st.stop()
 
-        if _uses_internal_scaler(model):
-            X_in = X_df
+        # External scaler path (backup RF)
+        if hasattr(scaler, "feature_names_in_"):
+            if list(scaler.feature_names_in_) != list(EXPECTED):
+                st.error("Scaler feature-name order does not match EXPECTED"); st.stop()
+        X_in = scaler.transform(X_df)
+
+        # Predict
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(X_in)[0]
+            pred = int(np.argmax(proba))
         else:
-            if scaler is None:
-                st.error("External scaler missing for this model"); st.stop()
-            if hasattr(scaler, "feature_names_in_"):
-                missing = [c for c in scaler.feature_names_in_ if c not in X_df.columns]
-                extra = [c for c in X_df.columns if c not in scaler.feature_names_in_]
-                if missing or extra:
-                    st.error(f"Scaler feature-name mismatch. missing={missing} extra={extra}"); st.stop()
-            X_in = scaler.transform(X_df)
-
-        proba = model.predict_proba(X_in)[0]
-        pred = int(np.argmax(proba))
+            pred = int(model.predict(X_in)[0])
+            proba = np.array([1 - pred, pred], dtype=float)
 
         st.header("🎯 Prediction Results")
         if pred == 1:
@@ -200,36 +182,29 @@ if input_method == "Manual Feature Input":
 # -----------------------------------------------------------------------------
 elif input_method == "URL Analysis":
     st.header("URL Analysis")
-    st.info("Enter a URL to extract features automatically (feature extraction not implemented).")
+    st.info("Enter a URL to extract features automatically (not implemented).")
     url_input = st.text_input("Enter URL:", placeholder="https://example.com")
     if st.button("Analyze URL"):
         if url_input:
-            st.warning("Feature extraction from URL not implemented yet. Use manual input or batch.")
+            st.warning("Feature extraction not implemented. Use manual input or batch.")
         else:
             st.error("Please enter a URL")
 
 # -----------------------------------------------------------------------------
-# Batch Prediction (fixed)
+# Batch Prediction (strict to match scaler + RF)
 # -----------------------------------------------------------------------------
 elif input_method == "Batch Prediction":
     st.header("Batch Prediction")
-
     uploaded_file = st.file_uploader("Upload CSV file with features", type=["csv"])
 
     if uploaded_file is not None:
-        # Read and normalize headers early
         df = pd.read_csv(uploaded_file)
-        df.columns = (
-            df.columns
-              .str.strip()
-              .str.replace(r"\s+", " ", regex=True)
-        )
+        df.columns = df.columns.str.strip().str.replace(r"\s+", " ", regex=True)
 
         st.write({"rows": len(df), "cols": len(df.columns)})
         st.write("Data preview:")
         st.dataframe(df.head())
 
-        # If an obvious target is present, show a tally
         target_like = [c for c in df.columns if c.strip().lower() in {"class","label","target","y"}]
         if target_like:
             st.info(f"Found target-like columns: {target_like}. They will be dropped for prediction.")
@@ -243,13 +218,12 @@ elif input_method == "Batch Prediction":
         st.write(f"Number of columns: {len(df.columns)}")
 
         if st.button("Run Batch Prediction", type="primary"):
-            if model is None:
-                st.error("Model not loaded"); st.stop()
+            if model is None or scaler is None:
+                st.error("Model or scaler not loaded"); st.stop()
 
             try:
                 # Drop target-like columns
-                drop_candidates = [c for c in df.columns if c.strip().lower() in {"class","label","target","y"}]
-                features_df = df.drop(columns=drop_candidates, errors="ignore").copy()
+                features_df = df.drop(columns=target_like, errors="ignore").copy()
 
                 # Require exact set and order of features
                 missing = [c for c in EXPECTED if c not in features_df.columns]
@@ -259,7 +233,6 @@ elif input_method == "Batch Prediction":
                     st.write({"missing": missing, "extra": extra})
                     st.stop()
 
-                # Reorder to training order
                 features_df = features_df[EXPECTED]
 
                 # Ensure numeric
@@ -269,27 +242,20 @@ elif input_method == "Batch Prediction":
                     st.write(features_df.isna().sum())
                     st.stop()
 
-                # Choose scaling path
-                if _uses_internal_scaler(model):
-                    X_in = features_df
-                    st.info("Using model’s internal scaler")
-                else:
-                    if scaler is None:
-                        st.error("External scaler is required but missing"); st.stop()
-                    if hasattr(scaler, "feature_names_in_"):
-                        if list(scaler.feature_names_in_) != list(EXPECTED):
-                            st.error("Scaler feature-name order does not match EXPECTED"); st.stop()
-                    X_in = scaler.transform(features_df)
-                    st.success("Features scaled using external scaler")
+                # External scaler path
+                if hasattr(scaler, "feature_names_in_"):
+                    if list(scaler.feature_names_in_) != list(EXPECTED):
+                        st.error("Scaler feature-name order does not match EXPECTED"); st.stop()
+                X_in = scaler.transform(features_df)
 
                 # Predict
-                predictions = model.predict(X_in)
                 if hasattr(model, "predict_proba"):
                     probabilities = model.predict_proba(X_in)
+                    predictions = np.argmax(probabilities, axis=1)
                     legit_prob = probabilities[:, 0]
                     phish_prob = probabilities[:, 1]
                 else:
-                    # Fallback if model lacks predict_proba
+                    predictions = model.predict(X_in)
                     phish_prob = predictions.astype(float)
                     legit_prob = 1.0 - phish_prob
 
@@ -310,7 +276,6 @@ elif input_method == "Batch Prediction":
 
                 display_columns = ["Status", "Legitimate_Prob", "Phishing_Prob"]
                 if target_like:
-                    # show first target-like column if present
                     display_columns = [target_like[0]] + display_columns
 
                 st.subheader("🔍 Detailed Results")
@@ -342,7 +307,7 @@ elif input_method == "Batch Prediction":
                 st.write("1) Headers must exactly match EXPECTED.")
                 st.write("2) Remove any target column (class/label/target/y).")
                 st.write("3) All values must be numeric.")
-                st.write("4) Scaler and model must come from the same training pipeline.")
+                st.write("4) scaler.pkl must match backup_model.pkl training run.")
 
 # -----------------------------------------------------------------------------
 # Footer
