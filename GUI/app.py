@@ -188,4 +188,5 @@ elif input_method == "Batch Prediction":
 
 # Footer
 st.markdown("---")
-st.markdown("Built with Streamlit 🎈 | Cybersecurity Project")
+
+st.markdown("Built by Group AJ 🎈 | Cybersecurity DLI Project")
