@@ -115,13 +115,13 @@ if input_method == "Manual Feature Input":
     # Prediction button
     if st.button("🔍 Analyze URL", type="primary"):
         if model is not None:
-            # Create feature array (adjust based on your actual features)
+            # Create feature array with exactly 30 features
             features = np.array([[
                 url_length, domain_age, subdomain_count, special_chars,
                 https_usage, google_index, page_rank, domain_registration_length,
-                feature1, feature2, feature3, feature4, feature5, feature6,
-                feature7, feature8, feature9
-                # Add more features to match your model's expected input
+                feat9, feat10, feat11, feat12, feat13, feat14, feat15, feat16,
+                feat17, feat18, feat19, feat20, feat21, feat22, feat23, feat24,
+                feat25, feat26, feat27, feat28, feat29, feat30
             ]])
             
             # Scale features if scaler is available
