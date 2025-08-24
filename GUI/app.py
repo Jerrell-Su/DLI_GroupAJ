@@ -77,9 +77,11 @@ def _resolve_expected(scaler):
 EXPECTED = _resolve_expected(scaler)
 
 # Diagnostics
-st.caption(f"len(EXPECTED)={len(EXPECTED)}")
-if hasattr(scaler, "feature_names_in_"):
-    st.caption(f"Scaler expects: {list(scaler.feature_names_in_)}")
+DEBUG = False  # set True when you want to see developer info
+if DEBUG:
+    st.caption(f"len(EXPECTED)={len(EXPECTED)}")
+    if hasattr(scaler, "feature_names_in_"):
+        st.caption(f"Scaler expects: {list(scaler.feature_names_in_)}")
 
 # -----------------------------------------------------------------------------
 # Sidebar
