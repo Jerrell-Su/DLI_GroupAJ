@@ -54,6 +54,9 @@ def load_scaler():
 model = load_model()
 scaler = load_scaler()
 
+def _uses_internal_scaler(m):
+    return hasattr(m, "scaler") and hasattr(m, "stacking_model")
+
 # Canonical training feature names
 def _resolve_expected(model, scaler):
     if hasattr(model, "feature_names_in_"):
@@ -72,6 +75,18 @@ def _resolve_expected(model, scaler):
     ]
 
 EXPECTED = _resolve_expected(model, scaler)
+
+# OPTIONAL diagnostics — place AFTER EXPECTED is set
+st.caption(f"len(EXPECTED)={len(EXPECTED)}  EXPECTED={EXPECTED}")
+try:
+    base = getattr(model, "stacking_model", None)
+    if base and hasattr(base, "estimators_"):
+        ns = {name: getattr(est, "n_features_in_", None) for name, est in base.named_estimators_.items()}
+        st.caption(f"Base estimator feature counts: {ns}")
+except Exception:
+    pass
+if hasattr(scaler, "feature_names_in_"):
+    st.caption(f"External scaler expects: {list(scaler.feature_names_in_)}")
 
 # Sidebar for input method
 st.sidebar.header("Input Method")
@@ -144,32 +159,31 @@ if input_method == "Manual Feature Input":
             feat25, feat26, feat27, feat28, feat29, feat30
         ]
 
-    # 🔁 REPLACE the old np.array/predict block with ONLY this:
     if st.button("🔍 Analyze URL", type="primary"):
         if model is None:
             st.error("Model not loaded"); st.stop()
+
         X_df = pd.DataFrame([_manual_row()], columns=EXPECTED)
 
-        # hard guards before any transform
-        if hasattr(model, "n_features_in_") and model.n_features_in_ != len(EXPECTED):
-            st.error(f"Model expects {model.n_features_in_} features, you provided {len(EXPECTED)}"); st.stop()
-        if hasattr(scaler, "feature_names_in_"):
-            missing = [c for c in scaler.feature_names_in_ if c not in X_df.columns]
-            extra = [c for c in X_df.columns if c not in scaler.feature_names_in_]
-            if missing or extra:
-                st.error(f"Scaler feature-name mismatch. missing={missing} extra={extra}"); st.stop()
-
+        # guards
         X_df = X_df.apply(pd.to_numeric, errors="coerce")
         if X_df.isna().any().any():
             st.error("Non-numeric inputs detected"); st.write(X_df.isna().sum()); st.stop()
 
-        try:
-            X_scaled = scaler.transform(X_df) if scaler is not None else X_df.to_numpy()
-        except Exception as e:
-            # fall back if scaler was fit without names
-            X_scaled = X_df.to_numpy()
+        # choose scaling path
+        if _uses_internal_scaler(model):
+            X_in = X_df                     # let model.scale(DataFrame)
+        else:
+            if scaler is None:
+                st.error("External scaler missing for this model"); st.stop()
+            if hasattr(scaler, "feature_names_in_"):
+                missing = [c for c in scaler.feature_names_in_ if c not in X_df.columns]
+                extra = [c for c in X_df.columns if c not in scaler.feature_names_in_]
+                if missing or extra:
+                    st.error(f"Scaler feature-name mismatch. missing={missing} extra={extra}"); st.stop()
+            X_in = scaler.transform(X_df)   # use external scaler
 
-        proba = model.predict_proba(X_scaled)[0]
+        proba = model.predict_proba(X_in)[0]
         pred = int(np.argmax(proba))
 
         st.header("🎯 Prediction Results")
@@ -245,18 +259,20 @@ elif input_method == "Batch Prediction":
                         st.write(features_df.isna().sum())
                         st.stop()
 
-                    # scale if scaler provided
-                    try:
-                        features_scaled = scaler.transform(features_df)
-                        st.success("✅ Features scaled using loaded scaler")
-                    except Exception as e:
-                        # fall back to numpy if the scaler was fit without feature names
-                        features_scaled = features_df.to_numpy()
-                        st.info(f"ℹ️ Using raw features (scaler not applied): {e}")
+                    # scale or pass through depending on model type
+                    if _uses_internal_scaler(model):
+                        X_in = features_df                   # DataFrame so internal scaler runs
+                        st.info("Using model’s internal scaler")
+                    else:
+                        try:
+                            X_in = scaler.transform(features_df)
+                            st.success("Features scaled using external scaler")
+                        except Exception as e:
+                            st.error(f"Scaler failed: {e}"); st.stop()
 
                     # predict
-                    predictions = model.predict(features_scaled)
-                    probabilities = model.predict_proba(features_scaled)
+                    predictions = model.predict(X_in)
+                    probabilities = model.predict_proba(X_in)
 
                     # assemble results
                     results_df = df.copy()
