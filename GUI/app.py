@@ -77,24 +77,40 @@ if input_method == "Manual Feature Input":
         page_rank = st.slider("Page Rank", 0.0, 10.0, 5.0)
         domain_registration_length = st.number_input("Domain Registration Length (years)", min_value=1, max_value=100, value=1)
     
-    # Additional features (adjust based on your actual feature set)
-    st.subheader("Additional Features")
+    # Additional features - 30 total features needed
+    st.subheader("Additional URL Features (22 more needed)")
     col3, col4, col5 = st.columns(3)
     
+    # Features 9-16
     with col3:
-        feature1 = st.number_input("Feature 1", value=0.0)
-        feature2 = st.number_input("Feature 2", value=0.0)
-        feature3 = st.number_input("Feature 3", value=0.0)
+        feat9 = st.number_input("Suspicious Keywords Count", min_value=0, value=0)
+        feat10 = st.number_input("Dots in URL", min_value=0, value=1)
+        feat11 = st.number_input("Hyphens Count", min_value=0, value=0)
+        feat12 = st.number_input("Underscores Count", min_value=0, value=0)
+        feat13 = st.number_input("Slashes Count", min_value=0, value=2)
+        feat14 = st.number_input("Question Marks", min_value=0, value=0)
+        feat15 = st.number_input("Equal Signs", min_value=0, value=0)
+        feat16 = st.number_input("At Symbols (@)", min_value=0, value=0)
     
+    # Features 17-24
     with col4:
-        feature4 = st.number_input("Feature 4", value=0.0)
-        feature5 = st.number_input("Feature 5", value=0.0)
-        feature6 = st.number_input("Feature 6", value=0.0)
+        feat17 = st.number_input("Ampersands (&)", min_value=0, value=0)
+        feat18 = st.number_input("Percent Signs (%)", min_value=0, value=0)
+        feat19 = st.number_input("Hash Signs (#)", min_value=0, value=0)
+        feat20 = st.number_input("Digits Count", min_value=0, value=2)
+        feat21 = st.number_input("Letters Count", min_value=0, value=20)
+        feat22 = st.slider("Alexa Rank (normalized)", 0.0, 1.0, 0.5)
+        feat23 = st.slider("Domain Trust Score", 0.0, 1.0, 0.8)
+        feat24 = st.selectbox("Has SSL Certificate", [0, 1], format_func=lambda x: "Yes" if x else "No")
     
+    # Features 25-30
     with col5:
-        feature7 = st.number_input("Feature 7", value=0.0)
-        feature8 = st.number_input("Feature 8", value=0.0)
-        feature9 = st.number_input("Feature 9", value=0.0)
+        feat25 = st.number_input("Redirects Count", min_value=0, value=0)
+        feat26 = st.slider("Page Load Time (seconds)", 0.0, 10.0, 2.0)
+        feat27 = st.selectbox("Has Forms", [0, 1], format_func=lambda x: "Yes" if x else "No")
+        feat28 = st.selectbox("Has Hidden Elements", [0, 1], format_func=lambda x: "Yes" if x else "No")
+        feat29 = st.slider("External Links Ratio", 0.0, 1.0, 0.3)
+        feat30 = st.slider("Image to Text Ratio", 0.0, 1.0, 0.5)
     
     # Prediction button
     if st.button("🔍 Analyze URL", type="primary"):
@@ -188,4 +204,4 @@ elif input_method == "Batch Prediction":
 
 # Footer
 st.markdown("---")
-st.markdown("Built with Streamlit 🎈 | Cybersecurity Project")
+st.markdown("Built by Group AJ 🎈 | Cybersecurity DLI Project")
