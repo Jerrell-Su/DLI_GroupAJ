@@ -1,4 +1,4 @@
-# app.py — Streamlit UI for backup_model.pkl + scaler.pkl
+# app.py — Streamlit UI for model.pkl + scaler.pkl
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -33,10 +33,10 @@ def _pick(*cands):
 # -----------------------------------------------------------------------------
 @st.cache_resource
 def load_model():
-    p = _pick(MODEL_DIR/"backup_model.pkl", APP_DIR/"backup_model.pkl", ROOT_DIR/"backup_model.pkl")
+    p = _pick(MODEL_DIR/"model.pkl", APP_DIR/"model.pkl", ROOT_DIR/"model.pkl")
     if not p:
-        st.error("backup_model.pkl not found")
-        st.caption(f"Tried: {[str(x) for x in [MODEL_DIR/'backup_model.pkl', APP_DIR/'backup_model.pkl', ROOT_DIR/'backup_model.pkl']]}")
+        st.error("model.pkl not found")
+        st.caption(f"Tried: {[str(x) for x in [MODEL_DIR/'model.pkl', APP_DIR/'model.pkl', ROOT_DIR/'model.pkl']]}")
         return None
     return joblib.load(p)
 
@@ -44,7 +44,7 @@ def load_model():
 def load_scaler():
     p = _pick(MODEL_DIR/"scaler.pkl", APP_DIR/"scaler.pkl", ROOT_DIR/"scaler.pkl")
     if not p:
-        st.error("scaler.pkl not found (required for backup_model.pkl)")
+        st.error("scaler.pkl not found (required for model.pkl)")
         return None
     return joblib.load(p)
 
@@ -52,7 +52,7 @@ model = load_model()
 scaler = load_scaler()
 
 def _uses_internal_scaler(_):
-    # backup_model is a plain RF, so False
+    # model is a plain RF, so False
     return False
 
 # -----------------------------------------------------------------------------
@@ -307,7 +307,7 @@ elif input_method == "Batch Prediction":
                 st.write("1) Headers must exactly match EXPECTED.")
                 st.write("2) Remove any target column (class/label/target/y).")
                 st.write("3) All values must be numeric.")
-                st.write("4) scaler.pkl must match backup_model.pkl training run.")
+                st.write("4) scaler.pkl must match model.pkl training run.")
 
 # -----------------------------------------------------------------------------
 # Footer
