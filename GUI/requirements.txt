@@ -5,6 +5,7 @@ scikit-learn
 joblib
 matplotlib
 seaborn
+imbalanced-learn
 tensorflow
 keras
 xgboost
