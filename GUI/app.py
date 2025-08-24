@@ -54,6 +54,25 @@ def load_scaler():
 model = load_model()
 scaler = load_scaler()
 
+# Canonical training feature names
+def _resolve_expected(model, scaler):
+    if hasattr(model, "feature_names_in_"):
+        return list(model.feature_names_in_)
+    if hasattr(scaler, "feature_names_in_"):
+        return list(scaler.feature_names_in_)
+    return [
+        "url_length","domain_age","subdomain_count","special_chars",
+        "https_usage","google_index","page_rank","domain_registration_length",
+        "suspicious_keywords","dots_count","hyphens_count","underscores_count",
+        "slashes_count","question_marks","equal_signs","at_symbols",
+        "ampersands","percent_signs","hash_signs","digits_count",
+        "letters_count","alexa_rank","domain_trust","ssl_certificate",
+        "redirects_count","page_load_time","has_forms","hidden_elements",
+        "external_links_ratio","image_text_ratio"
+    ]
+
+EXPECTED = _resolve_expected(model, scaler)
+
 # Sidebar for input method
 st.sidebar.header("Input Method")
 input_method = st.sidebar.radio(
@@ -138,57 +157,42 @@ if input_method == "Manual Feature Input":
             feat25, feat26, feat27, feat28, feat29, feat30
         ]
 
+    # 🔁 REPLACE the old np.array/predict block with ONLY this:
     if st.button("🔍 Analyze URL", type="primary"):
-        if model is None or scaler is None:
-            st.error("Model/scaler not loaded")
+        if model is None:
+            st.error("Model not loaded"); st.stop()
+        X_df = pd.DataFrame([_manual_row()], columns=EXPECTED)
+
+        # hard guards before any transform
+        if hasattr(model, "n_features_in_") and model.n_features_in_ != len(EXPECTED):
+            st.error(f"Model expects {model.n_features_in_} features, you provided {len(EXPECTED)}"); st.stop()
+        if hasattr(scaler, "feature_names_in_"):
+            missing = [c for c in scaler.feature_names_in_ if c not in X_df.columns]
+            extra = [c for c in X_df.columns if c not in scaler.feature_names_in_]
+            if missing or extra:
+                st.error(f"Scaler feature-name mismatch. missing={missing} extra={extra}"); st.stop()
+
+        X_df = X_df.apply(pd.to_numeric, errors="coerce")
+        if X_df.isna().any().any():
+            st.error("Non-numeric inputs detected"); st.write(X_df.isna().sum()); st.stop()
+
+        try:
+            X_scaled = scaler.transform(X_df) if scaler is not None else X_df.to_numpy()
+        except Exception as e:
+            # fall back if scaler was fit without names
+            X_scaled = X_df.to_numpy()
+
+        proba = model.predict_proba(X_scaled)[0]
+        pred = int(np.argmax(proba))
+
+        st.header("🎯 Prediction Results")
+        if pred == 1:
+            st.error(f"⚠️ PHISHING DETECTED - Confidence: {proba[1]:.2%}")
         else:
-            try:
-                # assemble as DataFrame with training headers
-                X_df = pd.DataFrame([_manual_row()], columns=EXPECTED)
-
-                # optional sanity check vs model/scaler metadata
-                if hasattr(model, "n_features_in_") and model.n_features_in_ != len(EXPECTED):
-                    st.error(f"Model expects {getattr(model,'n_features_in_', None)} features, provided {len(EXPECTED)}")
-                    st.stop()
-                if hasattr(scaler, "feature_names_in_"):
-                    missing = [c for c in scaler.feature_names_in_ if c not in X_df.columns]
-                    extra = [c for c in X_df.columns if c not in scaler.feature_names_in_]
-                    if missing or extra:
-                        st.error(f"Feature name mismatch. missing={missing} extra={extra}")
-                        st.stop()
-
-                # numeric coercion guard
-                X_df = X_df.apply(pd.to_numeric, errors="coerce")
-                if X_df.isna().any().any():
-                    st.error("Non-numeric values after coercion")
-                    st.write(X_df.isna().sum())
-                    st.stop()
-
-                # scale with name-aware path, with safe fallback
-                try:
-                    X_scaled = scaler.transform(X_df)
-                except Exception:
-                    X_scaled = X_df.to_numpy()
-
-                # predict
-                proba = model.predict_proba(X_scaled)[0]
-                pred = int(np.argmax(proba))
-
-                st.header("🎯 Prediction Results")
-                if pred == 1:
-                    st.error(f"⚠️ PHISHING DETECTED - Confidence: {proba[1]:.2%}")
-                else:
-                    st.success(f"✅ LEGITIMATE URL - Confidence: {proba[0]:.2%}")
-
-                c1, c2 = st.columns(2)
-                with c1: st.metric("Legitimate Probability", f"{proba[0]:.2%}")
-                with c2: st.metric("Phishing Probability", f"{proba[1]:.2%}")
-
-            except Exception as e:
-                st.error(f"❌ Manual prediction error: {e}")
-                st.caption(f"Model n_features_in_: {getattr(model,'n_features_in_', 'unknown')}")
-                if hasattr(scaler, 'feature_names_in_'):
-                    st.caption(f"Scaler expects: {list(scaler.feature_names_in_)}")
+            st.success(f"✅ LEGITIMATE URL - Confidence: {proba[0]:.2%}")
+        c1, c2 = st.columns(2)
+        with c1: st.metric("Legitimate Probability", f"{proba[0]:.2%}")
+        with c2: st.metric("Phishing Probability", f"{proba[1]:.2%}")
 
 elif input_method == "URL Analysis":
     st.header("URL Analysis")
