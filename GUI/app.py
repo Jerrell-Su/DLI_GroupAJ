@@ -177,34 +177,102 @@ elif input_method == "Batch Prediction":
         st.write("Data preview:")
         st.dataframe(df.head())
         
+        # Check if 'class' column exists and remove it
+        if 'class' in df.columns:
+            st.info("ℹ️ Found 'class' column - removing it for prediction")
+            features_df = df.drop('class', axis=1)
+            st.write("Target column preview:")
+            st.write(df['class'].value_counts())
+        else:
+            features_df = df
+            
+        st.write(f"Feature columns for prediction: {list(features_df.columns)}")
+        st.write(f"Number of features: {len(features_df.columns)}")
+        
         if st.button("Run Batch Prediction"):
             if model is not None:
                 try:
-                    # Scale features if needed
-                    features_scaled = scaler.transform(df)
+                    # Check feature count
+                    expected_features = 30  # Your model expects 30 features
+                    if len(features_df.columns) != expected_features:
+                        st.error(f"❌ Feature count mismatch! Model expects {expected_features} features, got {len(features_df.columns)}")
+                        st.write("Expected features for your model:")
+                        expected_feature_names = [
+                            "url_length", "domain_age", "subdomain_count", "special_chars",
+                            "https_usage", "google_index", "page_rank", "domain_registration_length",
+                            "suspicious_keywords", "dots_count", "hyphens_count", "underscores_count",
+                            "slashes_count", "question_marks", "equal_signs", "at_symbols",
+                            "ampersands", "percent_signs", "hash_signs", "digits_count",
+                            "letters_count", "alexa_rank", "domain_trust", "ssl_certificate",
+                            "redirects_count", "page_load_time", "has_forms", "hidden_elements",
+                            "external_links_ratio", "image_text_ratio"
+                        ]
+                        st.write(expected_feature_names)
+                        return
+                    
+                    # Scale features if scaler is available and not default
+                    if hasattr(scaler, 'scale_') and scaler.scale_ is not None:
+                        features_scaled = scaler.transform(features_df)
+                        st.success("✅ Features scaled using loaded scaler")
+                    else:
+                        features_scaled = features_df.values
+                        st.info("ℹ️ Using raw features (no scaling)")
+                    
+                    # Make predictions
                     predictions = model.predict(features_scaled)
                     probabilities = model.predict_proba(features_scaled)
                     
-                    # Add predictions to dataframe
-                    df['Prediction'] = predictions
-                    df['Legitimate_Prob'] = probabilities[:, 0]
-                    df['Phishing_Prob'] = probabilities[:, 1]
-                    df['Status'] = df['Prediction'].map({0: 'Legitimate', 1: 'Phishing'})
+                    # Create results dataframe
+                    results_df = df.copy() if 'class' in df.columns else features_df.copy()
+                    results_df['Prediction'] = predictions
+                    results_df['Legitimate_Prob'] = probabilities[:, 0]
+                    results_df['Phishing_Prob'] = probabilities[:, 1]
+                    results_df['Status'] = results_df['Prediction'].map({0: 'Legitimate', 1: 'Phishing'})
                     
-                    st.success("Batch prediction completed!")
-                    st.dataframe(df[['Prediction', 'Status', 'Legitimate_Prob', 'Phishing_Prob']])
+                    st.success("✅ Batch prediction completed!")
+                    
+                    # Show summary
+                    st.subheader("📊 Prediction Summary")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total URLs", len(results_df))
+                    with col2:
+                        legitimate_count = (predictions == 0).sum()
+                        st.metric("Legitimate", legitimate_count)
+                    with col3:
+                        phishing_count = (predictions == 1).sum()
+                        st.metric("Phishing", phishing_count)
+                    
+                    # Show results
+                    st.subheader("🔍 Detailed Results")
+                    display_columns = ['Status', 'Legitimate_Prob', 'Phishing_Prob']
+                    if 'class' in df.columns:
+                        display_columns.insert(0, 'class')  # Show actual class if available
+                        
+                    st.dataframe(results_df[display_columns])
+                    
+                    # If actual class exists, show accuracy
+                    if 'class' in df.columns:
+                        actual = df['class'].values
+                        accuracy = (predictions == actual).mean()
+                        st.success(f"🎯 **Accuracy on uploaded data: {accuracy:.1%}**")
                     
                     # Download results
-                    csv = df.to_csv(index=False)
+                    csv = results_df.to_csv(index=False)
                     st.download_button(
-                        label="Download Results",
+                        label="📥 Download Results CSV",
                         data=csv,
                         file_name="phishing_predictions.csv",
                         mime="text/csv"
                     )
                     
                 except Exception as e:
-                    st.error(f"Error in batch prediction: {e}")
+                    st.error(f"❌ Error in batch prediction: {e}")
+                    st.write("**Troubleshooting tips:**")
+                    st.write("1. Make sure your CSV has exactly 30 feature columns")
+                    st.write("2. Remove the 'class' column if it exists")
+                    st.write("3. Check that column names match expected features")
+                    st.write("4. Ensure all values are numeric")
 
 # Footer
 st.markdown("---")
