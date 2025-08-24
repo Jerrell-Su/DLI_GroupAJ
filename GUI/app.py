@@ -5,6 +5,8 @@ import pickle
 import joblib
 from sklearn.preprocessing import StandardScaler
 import warnings
+from pathlib import Path
+
 warnings.filterwarnings('ignore')
 
 # Page configuration
@@ -18,33 +20,35 @@ st.set_page_config(
 st.title("🔒 URL-Based Phishing Detection System")
 st.markdown("**Detect malicious URLs using machine learning**")
 
-# Load your trained model (you'll need to save it first)
+# --- Path setup ---
+APP_DIR = Path(__file__).resolve().parent
+ROOT_DIR = APP_DIR.parent
+MODEL_DIR = ROOT_DIR / "Main_Model"
+
+def _pick(*cands):
+    for p in cands:
+        if p.is_file():
+            return p
+    return None
+
+# --- Model loader ---
 @st.cache_resource
 def load_model():
-    try:
-        # Try different possible model file names with correct path
-        model = joblib.load('../Main_Model/model.pkl')  # Path to Main_Model folder
-        return model
-    except:
-        try:
-            model = joblib.load('./model.pkl')  # Try local folder
-            return model
-        except:
-            st.error("Model file not found. Please ensure 'model.pkl' is in Main_Model folder.")
-            return None
+    p = _pick(MODEL_DIR/"model.pkl", APP_DIR/"model.pkl", ROOT_DIR/"model.pkl")
+    if not p:
+        st.error("model.pkl not found")
+        st.caption(f"Tried: {[str(x) for x in [MODEL_DIR/'model.pkl', APP_DIR/'model.pkl', ROOT_DIR/'model.pkl']]}")
+        return None
+    return joblib.load(p)
 
+# --- Scaler loader ---
 @st.cache_resource
 def load_scaler():
-    try:
-        scaler = joblib.load('../Main_Model/scaler.pkl')  # Path to Main_Model folder
-        return scaler
-    except:
-        try:
-            scaler = joblib.load('./scaler.pkl')  # Try local folder
-            return scaler
-        except:
-            st.warning("Scaler not found. Using default StandardScaler.")
-            return StandardScaler()
+    p = _pick(MODEL_DIR/"scaler.pkl", APP_DIR/"scaler.pkl", ROOT_DIR/"scaler.pkl")
+    if not p:
+        st.error("scaler.pkl not found (must be the fitted scaler)")
+        return None
+    return joblib.load(p)
 
 # Load model and scaler
 model = load_model()
