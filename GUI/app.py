@@ -17,8 +17,19 @@
 #     from feature import FeatureExtraction
 #     FEATURE_EXTRACTION_AVAILABLE = True
 # except ImportError as e:
-#     st.error(f"Could not import feature extraction module: {e}")
-#     FEATURE_EXTRACTION_AVAILABLE = False
+#     # Try alternative import methods
+#     try:
+#         import importlib.util
+#         spec = importlib.util.spec_from_file_location("feature", current_dir / "feature.py")
+#         feature_module = importlib.util.module_from_spec(spec)
+#         spec.loader.exec_module(feature_module)
+#         FeatureExtraction = feature_module.FeatureExtraction
+#         FEATURE_EXTRACTION_AVAILABLE = True
+#     except Exception as e2:
+#         st.warning(f"Feature extraction not available: {e}")
+#         st.caption("Make sure feature.py is in the same directory as app.py and all dependencies are installed:")
+#         st.code("pip install beautifulsoup4 requests python-whois googlesearch-python python-dateutil lxml")
+#         FEATURE_EXTRACTION_AVAILABLE = False
 
 # warnings.filterwarnings("ignore")
 
@@ -180,18 +191,31 @@
 #                 with st.expander("View Extracted Features"):
 #                     st.dataframe(features_df)
                 
-#                 # Check if we need to map features to expected format
-#                 if list(features_df.columns) != EXPECTED:
-#                     st.warning("⚠️ Feature names don't match expected format. Using extracted features directly.")
-#                     # You might need to create a mapping function here if your model expects different feature names
-#                     # For now, we'll proceed with the extracted features
-                    
-#                 # Ensure we have the right number of features
-#                 if len(features_df.columns) != len(EXPECTED):
-#                     st.error(f"Feature count mismatch. Expected {len(EXPECTED)}, got {len(features_df.columns)}")
-#                     st.stop()
+#                 # Debug info
+#                 st.info(f"Extracted {len(features_df.columns)} features, model expects {len(EXPECTED)}")
                 
-#                 # If feature names don't match, we'll use the extracted features but warn the user
+#                 # Force the features to match exactly what the model expects
+#                 if len(features_df.columns) != len(EXPECTED):
+#                     st.warning(f"Adjusting feature count from {len(features_df.columns)} to {len(EXPECTED)}")
+                    
+#                     # Get the feature values as a list
+#                     feature_values = features_df.iloc[0].tolist()
+                    
+#                     # Adjust the feature count
+#                     if len(feature_values) < len(EXPECTED):
+#                         # Add zeros for missing features
+#                         feature_values.extend([0] * (len(EXPECTED) - len(feature_values)))
+#                         st.info(f"Added {len(EXPECTED) - len(features_df.columns)} padding features")
+#                     elif len(feature_values) > len(EXPECTED):
+#                         # Trim extra features
+#                         feature_values = feature_values[:len(EXPECTED)]
+#                         st.info(f"Trimmed to first {len(EXPECTED)} features")
+                    
+#                     # Create new DataFrame with correct feature count and names
+#                     features_df = pd.DataFrame([feature_values], columns=EXPECTED)
+#                     st.success(f"✅ Features adjusted to match model expectations ({len(EXPECTED)} features)")
+                
+#                 # Convert to numpy array for prediction
 #                 X_features = features_df.values
                 
 #                 # Apply scaler
@@ -199,7 +223,12 @@
 #                     X_scaled = scaler.transform(X_features)
 #                 except Exception as e:
 #                     st.error(f"Error applying scaler: {e}")
-#                     st.error("This might be due to feature name/order mismatch with the trained model.")
+#                     st.error("This might be due to feature format issues.")
+#                     st.error("Debug info:")
+#                     st.write(f"Features shape: {X_features.shape}")
+#                     st.write(f"Features DataFrame columns: {len(features_df.columns)}")
+#                     if hasattr(scaler, "n_features_in_"):
+#                         st.write(f"Scaler expects: {scaler.n_features_in_} features")
 #                     st.stop()
                 
 #                 # Make prediction
@@ -456,6 +485,8 @@
 #         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
 #         if hasattr(scaler, "feature_names_in_"):
 #             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
+# #
 
 # app.py — Streamlit UI for model.pkl + scaler.pkl with integrated feature extraction
 import streamlit as st
@@ -760,13 +791,13 @@ if input_method == "URL Analysis":
                 st.markdown("- Try with a different URL format")
 
 # -----------------------------------------------------------------------------
-# Batch Prediction (strict to match scaler + RF)
+# Batch Prediction (handles both pre-extracted features and raw URLs)
 # -----------------------------------------------------------------------------
 elif input_method == "Batch Prediction":
     st.header("📊 Batch Prediction")
-    st.info("Upload a CSV file with extracted URL features for batch analysis.")
+    st.info("Upload a CSV file with URLs (and optionally labels) for batch analysis, or pre-extracted features.")
     
-    uploaded_file = st.file_uploader("Upload CSV file with features", type=["csv"])
+    uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
 
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
@@ -776,18 +807,45 @@ elif input_method == "Batch Prediction":
         st.write("**Data preview:**")
         st.dataframe(df.head())
 
-        target_like = [c for c in df.columns if c.strip().lower() in {"class","label","target","y"}]
-        if target_like:
-            st.info(f"Found target-like columns: {target_like}. They will be dropped for prediction.")
-            for tcol in target_like:
-                try:
-                    st.write({tcol: df[tcol].value_counts(dropna=False).to_dict()})
-                except Exception:
-                    pass
+        # Check if this is a URL-only file or a features file
+        url_columns = [c for c in df.columns if c.strip().lower() in {"url", "website", "link"}]
+        target_columns = [c for c in df.columns if c.strip().lower() in {"class","label","target","y"}]
+        
+        is_url_file = bool(url_columns) and len(df.columns) <= 3  # URL + maybe label + maybe index
+        is_feature_file = len(df.columns) >= 10  # Likely has extracted features
+        
+        if is_url_file:
+            st.success("📌 Detected URL-based file. Will extract features automatically.")
+            url_column = url_columns[0]
+            
+            if target_columns:
+                st.info(f"Found target column: {target_columns[0]}")
+                target_column = target_columns[0]
+                st.write({target_column: df[target_column].value_counts(dropna=False).to_dict()})
+            else:
+                target_column = None
+                
+        elif is_feature_file:
+            st.success("📌 Detected feature-based file. Will use existing features.")
+            target_like = [c for c in df.columns if c.strip().lower() in {"class","label","target","y"}]
+            if target_like:
+                st.info(f"Found target-like columns: {target_like}. They will be dropped for prediction.")
+                for tcol in target_like:
+                    try:
+                        st.write({tcol: df[tcol].value_counts(dropna=False).to_dict()})
+                    except Exception:
+                        pass
+        else:
+            st.warning("⚠️ Cannot determine file type. Please ensure your CSV has either:")
+            st.markdown("- A 'url' column for automatic feature extraction, OR")
+            st.markdown("- Pre-extracted features matching the expected format")
+            st.stop()
 
         st.write(f"**Columns in file:** {list(df.columns)}")
         st.write(f"**Number of columns:** {len(df.columns)}")
-        st.write(f"**Expected columns:** {EXPECTED}")
+        
+        if is_feature_file:
+            st.write(f"**Expected feature columns:** {EXPECTED}")
 
         if st.button("🚀 Run Batch Prediction", type="primary"):
             if model is None or scaler is None:
@@ -795,18 +853,77 @@ elif input_method == "Batch Prediction":
                 st.stop()
 
             try:
-                # Drop target-like columns
-                features_df = df.drop(columns=target_like, errors="ignore").copy()
+                if is_url_file:
+                    # Extract features from URLs
+                    if not FEATURE_EXTRACTION_AVAILABLE:
+                        st.error("Feature extraction not available for URL processing")
+                        st.stop()
+                    
+                    st.info("🔄 Extracting features from URLs... This may take a while.")
+                    
+                    all_features = []
+                    failed_urls = []
+                    
+                    # Create progress bar
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    for idx, row in df.iterrows():
+                        url = row[url_column]
+                        status_text.text(f"Processing URL {idx + 1}/{len(df)}: {url[:50]}...")
+                        
+                        try:
+                            # Add protocol if missing
+                            if not str(url).startswith(('http://', 'https://')):
+                                url = 'https://' + str(url)
+                            
+                            features_df, error = extract_url_features(url)
+                            
+                            if error:
+                                st.warning(f"Failed to extract features for {url}: {error}")
+                                # Use default/zero features for failed URLs
+                                features = [0] * len(EXPECTED)
+                                failed_urls.append(url)
+                            else:
+                                features = features_df.iloc[0].tolist()
+                            
+                            all_features.append(features)
+                            
+                        except Exception as e:
+                            st.warning(f"Error processing {url}: {str(e)}")
+                            features = [0] * len(EXPECTED)
+                            all_features.append(features)
+                            failed_urls.append(url)
+                        
+                        # Update progress
+                        progress_bar.progress((idx + 1) / len(df))
+                    
+                    # Clear progress indicators
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                    if failed_urls:
+                        st.warning(f"⚠️ Failed to extract features for {len(failed_urls)} URLs. Using default values.")
+                    
+                    # Create features DataFrame
+                    features_df = pd.DataFrame(all_features, columns=EXPECTED)
+                    
+                    st.success(f"✅ Feature extraction completed for {len(df)} URLs!")
+                    
+                else:
+                    # Use existing features (original logic)
+                    target_like = [c for c in df.columns if c.strip().lower() in {"class","label","target","y"}]
+                    features_df = df.drop(columns=target_like, errors="ignore").copy()
 
-                # Require exact set and order of features
-                missing = [c for c in EXPECTED if c not in features_df.columns]
-                extra   = [c for c in features_df.columns if c not in EXPECTED]
-                if missing or extra:
-                    st.error("❌ Columns mismatch")
-                    st.write({"missing": missing, "extra": extra})
-                    st.stop()
+                    # Require exact set and order of features
+                    missing = [c for c in EXPECTED if c not in features_df.columns]
+                    extra   = [c for c in features_df.columns if c not in EXPECTED]
+                    if missing or extra:
+                        st.error("❌ Columns mismatch")
+                        st.write({"missing": missing, "extra": extra})
+                        st.stop()
 
-                features_df = features_df[EXPECTED]
+                    features_df = features_df[EXPECTED]
 
                 # Ensure numeric
                 features_df = features_df.apply(pd.to_numeric, errors="coerce")
@@ -853,9 +970,15 @@ elif input_method == "Batch Prediction":
                     phish_count = int((predictions == 1).sum())
                     st.metric("Phishing", phish_count, delta=f"{phish_count/len(results_df)*100:.1f}%")
 
-                display_columns = ["Status", "Legitimate_Prob", "Phishing_Prob"]
-                if target_like:
-                    display_columns = [target_like[0]] + display_columns
+                # Determine display columns based on file type
+                if is_url_file:
+                    display_columns = [url_column, "Status", "Legitimate_Prob", "Phishing_Prob"]
+                    if target_column:
+                        display_columns = [url_column, target_column, "Status", "Legitimate_Prob", "Phishing_Prob"]
+                else:
+                    display_columns = ["Status", "Legitimate_Prob", "Phishing_Prob"]
+                    if target_like:
+                        display_columns = [target_like[0]] + display_columns
 
                 st.subheader("🔍 Detailed Results")
                 
@@ -879,16 +1002,41 @@ elif input_method == "Batch Prediction":
                 
                 st.dataframe(filtered_df[display_columns], use_container_width=True)
 
-                # Optional quick accuracy vs one binary target column if present
-                for tcol in target_like:
+                # Calculate accuracy if target column exists
+                if is_url_file and target_column:
                     try:
-                        uniq = set(pd.Series(df[tcol]).dropna().unique())
-                        if uniq <= {0,1}:
-                            acc = (predictions == df[tcol].to_numpy()).mean()
-                            st.metric(f"Accuracy vs '{tcol}'", f"{acc:.1%}")
-                            break
-                    except Exception:
-                        pass
+                        # Handle both numeric (0/1) and text (benign/phishing) labels
+                        target_values = df[target_column].copy()
+                        
+                        # Convert text labels to numeric if needed
+                        if target_values.dtype == 'object':
+                            # Map text labels to numeric
+                            label_mapping = {
+                                'benign': 0, 'legitimate': 0, 'safe': 0, 'good': 0,
+                                'phishing': 1, 'malicious': 1, 'bad': 1, 'unsafe': 1
+                            }
+                            target_values = target_values.str.lower().map(label_mapping)
+                        
+                        # Check if we have valid binary labels
+                        uniq = set(pd.Series(target_values).dropna().unique())
+                        if uniq <= {0, 1}:
+                            acc = (predictions == target_values.to_numpy()).mean()
+                            st.metric(f"Accuracy vs '{target_column}'", f"{acc:.1%}")
+                        else:
+                            st.info(f"Cannot calculate accuracy - found labels: {sorted(uniq)}")
+                    except Exception as e:
+                        st.warning(f"Could not calculate accuracy: {e}")
+                elif not is_url_file:
+                    # Original accuracy calculation for feature files
+                    for tcol in target_like:
+                        try:
+                            uniq = set(pd.Series(df[tcol]).dropna().unique())
+                            if uniq <= {0,1}:
+                                acc = (predictions == df[tcol].to_numpy()).mean()
+                                st.metric(f"Accuracy vs '{tcol}'", f"{acc:.1%}")
+                                break
+                        except Exception:
+                            pass
 
                 # Download
                 csv = results_df.to_csv(index=False)
@@ -902,10 +1050,15 @@ elif input_method == "Batch Prediction":
             except Exception as e:
                 st.error(f"❌ Error in batch prediction: {e}")
                 st.markdown("**Troubleshooting:**")
-                st.markdown("1. Headers must exactly match the expected feature names")
-                st.markdown("2. Remove any target column (class/label/target/y)")
-                st.markdown("3. All values must be numeric")
-                st.markdown("4. scaler.pkl must match model.pkl training run")
+                if is_url_file:
+                    st.markdown("1. Ensure URLs are properly formatted")
+                    st.markdown("2. Check internet connectivity for feature extraction")
+                    st.markdown("3. Some URLs may fail - this is normal")
+                else:
+                    st.markdown("1. Headers must exactly match the expected feature names")
+                    st.markdown("2. Remove any target column (class/label/target/y)")
+                    st.markdown("3. All values must be numeric")
+                    st.markdown("4. scaler.pkl must match model.pkl training run")
 
 # -----------------------------------------------------------------------------
 # Footer
