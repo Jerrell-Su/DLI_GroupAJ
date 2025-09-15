@@ -75,7 +75,10 @@ class FeatureExtraction:
         self.features.append(self.GoogleIndex())
         self.features.append(self.LinksPointingToPage())
         self.features.append(self.StatsReport())
+        self.features.append(self.URLLength()) 
 
+    def URLLength(self):
+        return len(self.url)
 
      # 1.UsingIp
     def UsingIp(self):
