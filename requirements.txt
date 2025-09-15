@@ -11,3 +11,9 @@ keras
 xgboost
 lightgbm
 catboost
+beautifulsoup4
+requests
+python-whois
+googlesearch-python
+python-dateutil
+lxml
