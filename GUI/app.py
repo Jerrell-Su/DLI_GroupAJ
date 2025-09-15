@@ -89,114 +89,50 @@ if DEBUG:
 st.sidebar.header("Input Method")
 input_method = st.sidebar.radio(
     "Choose input method:",
-    ["Manual Feature Input", "URL Analysis", "Batch Prediction"]
+    ["URL Analysis", "Batch Prediction"]
 )
-
-# -----------------------------------------------------------------------------
-# Manual Feature Input
-# -----------------------------------------------------------------------------
-if input_method == "Manual Feature Input":
-    st.header("Manual Feature Input")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        url_length = st.number_input("URL Length", min_value=0, max_value=1000, value=50)
-        domain_age = st.number_input("Domain Age (days)", min_value=0, max_value=10000, value=365)
-        subdomain_count = st.number_input("Subdomain Count", min_value=0, max_value=10, value=1)
-        special_chars = st.number_input("Special Character Count", min_value=0, max_value=100, value=5)
-    with col2:
-        https_usage = st.selectbox("HTTPS Usage", [0, 1], format_func=lambda x: "Yes" if x else "No")
-        google_index = st.selectbox("Google Indexed", [0, 1], format_func=lambda x: "Yes" if x else "No")
-        page_rank = st.slider("Page Rank", 0.0, 10.0, 5.0)
-        domain_registration_length = st.number_input("Domain Registration Length (years)", min_value=1, max_value=100, value=1)
-
-    st.subheader("Additional URL Features")
-    col3, col4, col5 = st.columns(3)
-    with col3:
-        feat9  = st.number_input("Suspicious Keywords Count", min_value=0, value=0)
-        feat10 = st.number_input("Dots in URL", min_value=0, value=1)
-        feat11 = st.number_input("Hyphens Count", min_value=0, value=0)
-        feat12 = st.number_input("Underscores Count", min_value=0, value=0)
-        feat13 = st.number_input("Slashes Count", min_value=0, value=2)
-        feat14 = st.number_input("Question Marks", min_value=0, value=0)
-        feat15 = st.number_input("Equal Signs", min_value=0, value=0)
-        feat16 = st.number_input("At Symbols (@)", min_value=0, value=0)
-    with col4:
-        feat17 = st.number_input("Ampersands (&)", min_value=0, value=0)
-        feat18 = st.number_input("Percent Signs (%)", min_value=0, value=0)
-        feat19 = st.number_input("Hash Signs (#)", min_value=0, value=0)
-        feat20 = st.number_input("Digits Count", min_value=0, value=2)
-        feat21 = st.number_input("Letters Count", min_value=0, value=20)
-        feat22 = st.slider("Alexa Rank (normalized)", 0.0, 1.0, 0.5)
-        feat23 = st.slider("Domain Trust Score", 0.0, 1.0, 0.8)
-        feat24 = st.selectbox("Has SSL Certificate", [0, 1], format_func=lambda x: "Yes" if x else "No")
-    with col5:
-        feat25 = st.number_input("Redirects Count", min_value=0, value=0)
-        feat26 = st.slider("Page Load Time (seconds)", 0.0, 10.0, 2.0)
-        feat27 = st.selectbox("Has Forms", [0, 1], format_func=lambda x: "Yes" if x else "No")
-        feat28 = st.selectbox("Has Hidden Elements", [0, 1], format_func=lambda x: "Yes" if x else "No")
-        feat29 = st.slider("External Links Ratio", 0.0, 1.0, 0.3)
-        feat30 = st.slider("Image to Text Ratio", 0.0, 1.0, 0.5)
-
-    def _manual_row():
-        return [
-            url_length, domain_age, subdomain_count, special_chars,
-            https_usage, google_index, page_rank, domain_registration_length,
-            feat9, feat10, feat11, feat12, feat13, feat14, feat15, feat16,
-            feat17, feat18, feat19, feat20, feat21, feat22, feat23, feat24,
-            feat25, feat26, feat27, feat28, feat29, feat30
-        ]
-
-    if st.button("🔍 Analyze URL", type="primary"):
-        if model is None or scaler is None:
-            st.error("Model or scaler not loaded"); st.stop()
-
-        X_df = pd.DataFrame([_manual_row()], columns=EXPECTED)
-        X_df = X_df.apply(pd.to_numeric, errors="coerce")
-        if X_df.isna().any().any():
-            st.error("Non-numeric inputs detected"); st.write(X_df.isna().sum()); st.stop()
-
-        # External scaler path (backup RF)
-        if hasattr(scaler, "feature_names_in_"):
-            if list(scaler.feature_names_in_) != list(EXPECTED):
-                st.error("Scaler feature-name order does not match EXPECTED"); st.stop()
-        X_in = scaler.transform(X_df)
-
-        # Predict
-        if hasattr(model, "predict_proba"):
-            proba = model.predict_proba(X_in)[0]
-            pred = int(np.argmax(proba))
-        else:
-            pred = int(model.predict(X_in)[0])
-            proba = np.array([1 - pred, pred], dtype=float)
-
-        st.header("🎯 Prediction Results")
-        if pred == 1:
-            st.error(f"⚠️ PHISHING DETECTED - Confidence: {proba[1]:.2%}")
-        else:
-            st.success(f"✅ LEGITIMATE URL - Confidence: {proba[0]:.2%}")
-        c1, c2 = st.columns(2)
-        with c1: st.metric("Legitimate Probability", f"{proba[0]:.2%}")
-        with c2: st.metric("Phishing Probability", f"{proba[1]:.2%}")
 
 # -----------------------------------------------------------------------------
 # URL Analysis
 # -----------------------------------------------------------------------------
-elif input_method == "URL Analysis":
-    st.header("URL Analysis")
-    st.info("Enter a URL to extract features automatically (not implemented).")
+if input_method == "URL Analysis":
+    st.header("🔍 Single URL Analysis")
+    st.info("Enter a URL to extract features automatically and detect phishing.")
+    
     url_input = st.text_input("Enter URL:", placeholder="https://example.com")
-    if st.button("Analyze URL"):
-        if url_input:
-            st.warning("Feature extraction not implemented. Use manual input or batch.")
-        else:
+    
+    if st.button("🔍 Analyze URL", type="primary"):
+        if not url_input:
             st.error("Please enter a URL")
+            st.stop()
+            
+        if model is None or scaler is None:
+            st.error("Model or scaler not loaded")
+            st.stop()
+        
+        # Note: Feature extraction would go here
+        st.warning("⚠️ URL feature extraction is not yet implemented.")
+        st.markdown("""
+        **To implement URL feature extraction, you would need to:**
+        
+        1. Parse the URL components (domain, path, query parameters, etc.)
+        2. Extract the 30 features your model expects:
+           - url_length, domain_age, subdomain_count, special_chars
+           - https_usage, google_index, page_rank, domain_registration_length
+           - And 22 other features...
+        3. Create a DataFrame with these features
+        4. Apply the scaler and make predictions
+        
+        **For now, please use the "Batch Prediction" option with a CSV file containing the extracted features.**
+        """)
 
 # -----------------------------------------------------------------------------
 # Batch Prediction (strict to match scaler + RF)
 # -----------------------------------------------------------------------------
 elif input_method == "Batch Prediction":
-    st.header("Batch Prediction")
+    st.header("📊 Batch Prediction")
+    st.info("Upload a CSV file with extracted URL features for batch analysis.")
+    
     uploaded_file = st.file_uploader("Upload CSV file with features", type=["csv"])
 
     if uploaded_file is not None:
@@ -204,7 +140,7 @@ elif input_method == "Batch Prediction":
         df.columns = df.columns.str.strip().str.replace(r"\s+", " ", regex=True)
 
         st.write({"rows": len(df), "cols": len(df.columns)})
-        st.write("Data preview:")
+        st.write("**Data preview:**")
         st.dataframe(df.head())
 
         target_like = [c for c in df.columns if c.strip().lower() in {"class","label","target","y"}]
@@ -216,12 +152,14 @@ elif input_method == "Batch Prediction":
                 except Exception:
                     pass
 
-        st.write(f"Columns in file: {list(df.columns)}")
-        st.write(f"Number of columns: {len(df.columns)}")
+        st.write(f"**Columns in file:** {list(df.columns)}")
+        st.write(f"**Number of columns:** {len(df.columns)}")
+        st.write(f"**Expected columns:** {EXPECTED}")
 
-        if st.button("Run Batch Prediction", type="primary"):
+        if st.button("🚀 Run Batch Prediction", type="primary"):
             if model is None or scaler is None:
-                st.error("Model or scaler not loaded"); st.stop()
+                st.error("Model or scaler not loaded")
+                st.stop()
 
             try:
                 # Drop target-like columns
@@ -247,7 +185,8 @@ elif input_method == "Batch Prediction":
                 # External scaler path
                 if hasattr(scaler, "feature_names_in_"):
                     if list(scaler.feature_names_in_) != list(EXPECTED):
-                        st.error("Scaler feature-name order does not match EXPECTED"); st.stop()
+                        st.error("Scaler feature-name order does not match EXPECTED")
+                        st.stop()
                 X_in = scaler.transform(features_df)
 
                 # Predict
@@ -268,20 +207,44 @@ elif input_method == "Batch Prediction":
                 results_df["Phishing_Prob"] = phish_prob
                 results_df["Status"] = results_df["Prediction"].map({0: "Legitimate", 1: "Phishing"})
 
-                st.success("✅ Batch prediction completed")
+                st.success("✅ Batch prediction completed successfully!")
 
                 st.subheader("📊 Prediction Summary")
                 col1, col2, col3 = st.columns(3)
-                with col1: st.metric("Total URLs", len(results_df))
-                with col2: st.metric("Legitimate", int((predictions == 0).sum()))
-                with col3: st.metric("Phishing", int((predictions == 1).sum()))
+                with col1: 
+                    st.metric("Total URLs", len(results_df))
+                with col2: 
+                    legit_count = int((predictions == 0).sum())
+                    st.metric("Legitimate", legit_count, delta=f"{legit_count/len(results_df)*100:.1f}%")
+                with col3: 
+                    phish_count = int((predictions == 1).sum())
+                    st.metric("Phishing", phish_count, delta=f"{phish_count/len(results_df)*100:.1f}%")
 
                 display_columns = ["Status", "Legitimate_Prob", "Phishing_Prob"]
                 if target_like:
                     display_columns = [target_like[0]] + display_columns
 
                 st.subheader("🔍 Detailed Results")
-                st.dataframe(results_df[display_columns])
+                
+                # Filter options
+                col1, col2 = st.columns(2)
+                with col1:
+                    status_filter = st.selectbox("Filter by Status:", ["All", "Legitimate", "Phishing"])
+                with col2:
+                    confidence_threshold = st.slider("Minimum Confidence:", 0.0, 1.0, 0.0, 0.1)
+                
+                # Apply filters
+                filtered_df = results_df.copy()
+                if status_filter != "All":
+                    filtered_df = filtered_df[filtered_df["Status"] == status_filter]
+                
+                if confidence_threshold > 0:
+                    filtered_df = filtered_df[
+                        (filtered_df["Legitimate_Prob"] >= confidence_threshold) | 
+                        (filtered_df["Phishing_Prob"] >= confidence_threshold)
+                    ]
+                
+                st.dataframe(filtered_df[display_columns], use_container_width=True)
 
                 # Optional quick accuracy vs one binary target column if present
                 for tcol in target_like:
@@ -297,7 +260,7 @@ elif input_method == "Batch Prediction":
                 # Download
                 csv = results_df.to_csv(index=False)
                 st.download_button(
-                    label="📥 Download Results CSV",
+                    label="📥 Download Complete Results CSV",
                     data=csv,
                     file_name="phishing_predictions.csv",
                     mime="text/csv",
@@ -305,11 +268,11 @@ elif input_method == "Batch Prediction":
 
             except Exception as e:
                 st.error(f"❌ Error in batch prediction: {e}")
-                st.write("**Troubleshooting:**")
-                st.write("1) Headers must exactly match EXPECTED.")
-                st.write("2) Remove any target column (class/label/target/y).")
-                st.write("3) All values must be numeric.")
-                st.write("4) scaler.pkl must match model.pkl training run.")
+                st.markdown("**Troubleshooting:**")
+                st.markdown("1. Headers must exactly match the expected feature names")
+                st.markdown("2. Remove any target column (class/label/target/y)")
+                st.markdown("3. All values must be numeric")
+                st.markdown("4. scaler.pkl must match model.pkl training run")
 
 # -----------------------------------------------------------------------------
 # Footer
