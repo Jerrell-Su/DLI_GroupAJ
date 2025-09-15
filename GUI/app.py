@@ -1,10 +1,24 @@
-# app.py — Streamlit UI for model.pkl + scaler.pkl
+# app.py — Streamlit UI for model.pkl + scaler.pkl with integrated feature extraction
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
 import warnings
 from pathlib import Path
+import sys
+import os
+
+# Add the current directory to Python path to import feature.py
+current_dir = Path(__file__).resolve().parent
+sys.path.append(str(current_dir))
+sys.path.append(str(current_dir.parent))  # Also add parent directory
+
+try:
+    from feature import FeatureExtraction
+    FEATURE_EXTRACTION_AVAILABLE = True
+except ImportError as e:
+    st.error(f"Could not import feature extraction module: {e}")
+    FEATURE_EXTRACTION_AVAILABLE = False
 
 warnings.filterwarnings("ignore")
 
@@ -54,6 +68,39 @@ scaler = load_scaler()
 def _uses_internal_scaler(_):
     # model is a plain RF, so False
     return False
+
+# -----------------------------------------------------------------------------
+# Feature extraction function
+# -----------------------------------------------------------------------------
+def extract_url_features(url):
+    """Extract features from URL using the FeatureExtraction class"""
+    if not FEATURE_EXTRACTION_AVAILABLE:
+        raise ImportError("Feature extraction module not available")
+    
+    try:
+        # Initialize feature extractor
+        extractor = FeatureExtraction(url)
+        
+        # Get the features list
+        features = extractor.getFeaturesList()
+        
+        # Define feature names based on the FeatureExtraction class methods
+        feature_names = [
+            'UsingIp', 'longUrl', 'shortUrl', 'symbol', 'redirecting',
+            'prefixSuffix', 'SubDomains', 'Hppts', 'DomainRegLen', 'Favicon',
+            'NonStdPort', 'HTTPSDomainURL', 'RequestURL', 'AnchorURL', 'LinksInScriptTags',
+            'ServerFormHandler', 'InfoEmail', 'AbnormalURL', 'WebsiteForwarding', 'StatusBarCust',
+            'DisableRightClick', 'UsingPopupWindow', 'IframeRedirection', 'AgeofDomain', 'DNSRecording',
+            'WebsiteTraffic', 'PageRank', 'GoogleIndex', 'LinksPointingToPage', 'StatsReport'
+        ]
+        
+        # Create DataFrame with extracted features
+        feature_df = pd.DataFrame([features], columns=feature_names)
+        
+        return feature_df, None  # Return DataFrame and no error
+        
+    except Exception as e:
+        return None, str(e)
 
 # -----------------------------------------------------------------------------
 # Canonical training feature names
@@ -109,22 +156,120 @@ if input_method == "URL Analysis":
         if model is None or scaler is None:
             st.error("Model or scaler not loaded")
             st.stop()
+            
+        if not FEATURE_EXTRACTION_AVAILABLE:
+            st.error("Feature extraction module not available. Please ensure feature.py is in the correct location.")
+            st.stop()
         
-        # Note: Feature extraction would go here
-        st.warning("⚠️ URL feature extraction is not yet implemented.")
-        st.markdown("""
-        **To implement URL feature extraction, you would need to:**
+        # Add protocol if missing
+        if not url_input.startswith(('http://', 'https://')):
+            url_input = 'https://' + url_input
         
-        1. Parse the URL components (domain, path, query parameters, etc.)
-        2. Extract the 30 features your model expects:
-           - url_length, domain_age, subdomain_count, special_chars
-           - https_usage, google_index, page_rank, domain_registration_length
-           - And 22 other features...
-        3. Create a DataFrame with these features
-        4. Apply the scaler and make predictions
-        
-        **For now, please use the "Batch Prediction" option with a CSV file containing the extracted features.**
-        """)
+        with st.spinner("Extracting features from URL..."):
+            try:
+                # Extract features
+                features_df, error = extract_url_features(url_input)
+                
+                if error:
+                    st.error(f"Error extracting features: {error}")
+                    st.stop()
+                
+                st.success("✅ Features extracted successfully!")
+                
+                # Display extracted features
+                with st.expander("View Extracted Features"):
+                    st.dataframe(features_df)
+                
+                # Check if we need to map features to expected format
+                if list(features_df.columns) != EXPECTED:
+                    st.warning("⚠️ Feature names don't match expected format. Using extracted features directly.")
+                    # You might need to create a mapping function here if your model expects different feature names
+                    # For now, we'll proceed with the extracted features
+                    
+                # Ensure we have the right number of features
+                if len(features_df.columns) != len(EXPECTED):
+                    st.error(f"Feature count mismatch. Expected {len(EXPECTED)}, got {len(features_df.columns)}")
+                    st.stop()
+                
+                # If feature names don't match, we'll use the extracted features but warn the user
+                X_features = features_df.values
+                
+                # Apply scaler
+                try:
+                    X_scaled = scaler.transform(X_features)
+                except Exception as e:
+                    st.error(f"Error applying scaler: {e}")
+                    st.error("This might be due to feature name/order mismatch with the trained model.")
+                    st.stop()
+                
+                # Make prediction
+                try:
+                    if hasattr(model, "predict_proba"):
+                        probabilities = model.predict_proba(X_scaled)
+                        prediction = np.argmax(probabilities, axis=1)[0]
+                        legit_prob = probabilities[0][0]
+                        phish_prob = probabilities[0][1]
+                    else:
+                        prediction = model.predict(X_scaled)[0]
+                        phish_prob = float(prediction)
+                        legit_prob = 1.0 - phish_prob
+                    
+                    # Display results
+                    st.subheader("🎯 Prediction Results")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        status = "🔴 Phishing" if prediction == 1 else "🟢 Legitimate"
+                        st.metric("Status", status)
+                    
+                    with col2:
+                        st.metric("Legitimate Probability", f"{legit_prob:.2%}")
+                    
+                    with col3:
+                        st.metric("Phishing Probability", f"{phish_prob:.2%}")
+                    
+                    # Confidence indicator
+                    confidence = max(legit_prob, phish_prob)
+                    if confidence > 0.8:
+                        confidence_text = "🟢 High Confidence"
+                    elif confidence > 0.6:
+                        confidence_text = "🟡 Medium Confidence"
+                    else:
+                        confidence_text = "🔴 Low Confidence"
+                    
+                    st.info(f"Prediction Confidence: {confidence_text} ({confidence:.1%})")
+                    
+                    # Additional analysis
+                    st.subheader("📊 Detailed Analysis")
+                    
+                    if prediction == 1:  # Phishing
+                        st.error("⚠️ **Warning: This URL appears to be malicious!**")
+                        st.markdown("""
+                        **Recommendations:**
+                        - Do not enter personal information
+                        - Do not download files from this site
+                        - Verify the URL with the legitimate organization
+                        - Report this URL to security authorities
+                        """)
+                    else:  # Legitimate
+                        st.success("✅ **This URL appears to be legitimate**")
+                        st.markdown("""
+                        **Note:**
+                        - This analysis is based on URL characteristics only
+                        - Always exercise caution when sharing personal information
+                        - Verify SSL certificates and site authenticity
+                        """)
+                    
+                except Exception as e:
+                    st.error(f"Error making prediction: {e}")
+                    
+            except Exception as e:
+                st.error(f"Unexpected error during analysis: {e}")
+                st.markdown("**Troubleshooting tips:**")
+                st.markdown("- Check if the URL is accessible")
+                st.markdown("- Ensure you have internet connectivity")
+                st.markdown("- Try with a different URL format")
 
 # -----------------------------------------------------------------------------
 # Batch Prediction (strict to match scaler + RF)
@@ -279,3 +424,35 @@ elif input_method == "Batch Prediction":
 # -----------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("Built by Group AJ 🎈 | Cybersecurity DLI Project")
+
+# -----------------------------------------------------------------------------
+# Additional Information Section
+# -----------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("---")
+    st.header("ℹ️ Information")
+    
+    st.markdown("**Feature Extraction Status:**")
+    if FEATURE_EXTRACTION_AVAILABLE:
+        st.success("✅ Available")
+    else:
+        st.error("❌ Not Available")
+        st.caption("Make sure feature.py is in the correct location")
+    
+    st.markdown("**Model Status:**")
+    if model is not None:
+        st.success("✅ Loaded")
+    else:
+        st.error("❌ Not Loaded")
+    
+    st.markdown("**Scaler Status:**")
+    if scaler is not None:
+        st.success("✅ Loaded")
+    else:
+        st.error("❌ Not Loaded")
+    
+    with st.expander("🔧 Technical Details"):
+        st.markdown(f"**Expected Features:** {len(EXPECTED)}")
+        st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
+        if hasattr(scaler, "feature_names_in_"):
+            st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
