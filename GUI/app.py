@@ -497,6 +497,7 @@ import warnings
 from pathlib import Path
 import sys
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # -------------------------------------------------------------------
 # Import feature extractor
@@ -662,6 +663,9 @@ if input_method == "URL Analysis":
 # -------------------------------------------------------------------
 # Batch Prediction (regex-only, consistent length)
 # -------------------------------------------------------------------
+# -------------------------------------------------------------------
+# Batch Prediction (regex-only, parallelized feature extraction)
+# -------------------------------------------------------------------
 elif input_method == "Batch Prediction":
     st.header("📊 Batch Prediction")
     st.info("Upload any file. All valid URLs inside will be extracted and analyzed.")
@@ -694,13 +698,10 @@ elif input_method == "Batch Prediction":
             if not FEATURE_EXTRACTION_AVAILABLE:
                 st.error("Feature extraction not available"); st.stop()
 
-            all_features = []
-            failed = []
-            progress = st.progress(0)
-            status = st.empty()
+            from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            for i, url in enumerate(urls):
-                status.text(f"Processing {i+1}/{len(urls)}: {url[:60]}")
+            def process_url(url):
+                """Extract features for a single URL with normalization."""
                 if not str(url).startswith(("http://","https://")):
                     url = "https://" + str(url)
                 try:
@@ -708,16 +709,28 @@ elif input_method == "Batch Prediction":
                     feats = fdf.iloc[0].tolist()
                 except Exception:
                     feats = [0] * len(EXPECTED)
-                    failed.append(url)
 
                 # Normalize length
                 if len(feats) < len(EXPECTED):
                     feats.extend([0] * (len(EXPECTED) - len(feats)))
                 elif len(feats) > len(EXPECTED):
                     feats = feats[:len(EXPECTED)]
+                return feats
 
-                all_features.append(feats)
-                progress.progress((i+1)/len(urls))
+            all_features = [None] * len(urls)
+            progress = st.progress(0)
+            status = st.empty()
+
+            # Run in parallel (adjust workers to your environment)
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = {executor.submit(process_url, url): idx for idx, url in enumerate(urls)}
+                completed = 0
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    all_features[idx] = future.result()
+                    completed += 1
+                    status.text(f"Processed {completed}/{len(urls)} URLs")
+                    progress.progress(completed/len(urls))
 
             progress.empty()
             status.empty()
@@ -784,6 +797,7 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
 
 
