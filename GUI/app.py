@@ -660,100 +660,88 @@ if input_method == "URL Analysis":
         st.metric("Phishing Probability", f"{phish_prob:.2%}")
 
 # -------------------------------------------------------------------
-# Batch Prediction
+# Batch Prediction (universal URL extractor)
 # -------------------------------------------------------------------
 elif input_method == "Batch Prediction":
     st.header("📊 Batch Prediction")
-    uploaded_file = st.file_uploader("Upload any file")
+    st.info("Upload any file. All valid URLs inside will be extracted and analyzed.")
+
+    uploaded_file = st.file_uploader("Upload file")
 
     URL_REGEX = re.compile(r'(https?://[^\s]+|www\.[^\s]+)', re.IGNORECASE)
-    def extract_urls_from_text(text: str):
-        return URL_REGEX.findall(text)
+
+    def extract_urls_from_any(df_or_text):
+        urls = []
+        if isinstance(df_or_text, pd.DataFrame):
+            for row in df_or_text.itertuples(index=False):
+                for cell in row:
+                    if isinstance(cell, str):
+                        urls.extend(URL_REGEX.findall(cell))
+        elif isinstance(df_or_text, str):
+            urls.extend(URL_REGEX.findall(df_or_text))
+        return list(dict.fromkeys(urls))  # dedupe
 
     if uploaded_file is not None:
         suffix = Path(uploaded_file.name).suffix.lower()
         raw_bytes = uploaded_file.read()
         uploaded_file.seek(0)
 
-        df = None
+        urls = []
         try:
             if suffix in {".csv",".tsv",".txt",".log"}:
                 try:
-                    df = pd.read_csv(uploaded_file, sep=None, engine="python")
+                    df = pd.read_csv(uploaded_file, sep=None, engine="python", header=None)
+                    urls = extract_urls_from_any(df)
                 except Exception:
                     text = raw_bytes.decode(errors="ignore")
-                    urls = extract_urls_from_text(text)
-                    df = pd.DataFrame({"url": urls})
+                    urls = extract_urls_from_any(text)
             elif suffix in {".xlsx",".xls"}:
-                df = pd.read_excel(uploaded_file)
+                df = pd.read_excel(uploaded_file, header=None)
+                urls = extract_urls_from_any(df)
             elif suffix==".json":
                 df = pd.read_json(uploaded_file)
+                urls = extract_urls_from_any(df)
             else:
                 text = raw_bytes.decode(errors="ignore")
-                urls = extract_urls_from_text(text)
-                df = pd.DataFrame({"url": urls})
+                urls = extract_urls_from_any(text)
         except Exception as e:
             st.error(f"Could not parse file: {e}")
             st.stop()
 
-        if df is None or df.empty:
-            st.error("No data extracted")
+        if not urls:
+            st.error("No valid URLs found in file")
             st.stop()
 
-        df.columns = df.columns.str.strip().str.replace(r"\s+", " ", regex=True)
-        st.write(df.head())
-
-        url_cols = [c for c in df.columns if c.lower() in {"url","website","link"}]
-        target_cols = [c for c in df.columns if c.lower() in {"class","label","target","y"}]
-        is_url_file = False
-        is_feature_file = False
-        url_column = None
-
-        if url_cols:
-            url_column = url_cols[0]
-            is_url_file = True
-        else:
-            if df.shape[1] <= 3:
-                urls = []
-                for row in df.itertuples(index=False):
-                    hits=[]
-                    for cell in row:
-                        if isinstance(cell,str):
-                            hits.extend(extract_urls_from_text(cell))
-                    urls.append(hits[0] if hits else None)
-                df["url"]=urls
-                if df["url"].notna().any():
-                    url_column="url"; is_url_file=True
-            if not is_url_file and df.shape[1]>=10:
-                is_feature_file=True
+        st.success(f"Found {len(urls)} URLs in file")
+        st.dataframe(pd.DataFrame({"url": urls}).head())
 
         if st.button("🚀 Run Batch Prediction", type="primary"):
             if model is None or scaler is None:
                 st.error("Model or scaler not loaded"); st.stop()
+            if not FEATURE_EXTRACTION_AVAILABLE:
+                st.error("Feature extraction not available"); st.stop()
 
-            if is_url_file:
-                if not FEATURE_EXTRACTION_AVAILABLE:
-                    st.error("Feature extraction not available"); st.stop()
-                feats=[]
-                for url in df[url_column]:
-                    if not str(url).startswith(("http://","https://")):
-                        url="https://"+str(url)
-                    try:
-                        fdf,_=extract_url_features(url)
-                        feats.append(fdf.iloc[0].tolist())
-                    except Exception:
-                        feats.append([0]*len(EXPECTED))
-                features_df=pd.DataFrame(feats,columns=EXPECTED)
-            else:
-                features_df=df.drop(columns=target_cols,errors="ignore").copy()
-                missing=[c for c in EXPECTED if c not in features_df.columns]
-                if missing:
-                    st.error(f"Missing features: {missing}"); st.stop()
-                features_df=features_df[EXPECTED]
+            all_features=[]
+            failed=[]
+            progress=st.progress(0)
+            status=st.empty()
 
-            features_df=features_df.apply(pd.to_numeric,errors="coerce")
-            if features_df.isna().any().any():
-                st.error("NaN in features"); st.stop()
+            for i,url in enumerate(urls):
+                status.text(f"Processing {i+1}/{len(urls)}: {url[:60]}")
+                if not str(url).startswith(("http://","https://")):
+                    url="https://"+str(url)
+                try:
+                    fdf,_=extract_url_features(url)
+                    feats=fdf.iloc[0].tolist()
+                except Exception:
+                    feats=[0]*len(EXPECTED)
+                    failed.append(url)
+                all_features.append(feats)
+                progress.progress((i+1)/len(urls))
+
+            progress.empty(); status.empty()
+
+            features_df=pd.DataFrame(all_features,columns=EXPECTED)
             X=scaler.transform(features_df)
 
             if hasattr(model,"predict_proba"):
@@ -764,13 +752,13 @@ elif input_method == "Batch Prediction":
                 preds=model.predict(X)
                 phish=preds.astype(float); legit=1.0-phish
 
-            results=df.copy()
-            results["Prediction"]=preds
-            results["Legitimate_Prob"]=legit
-            results["Phishing_Prob"]=phish
+            results=pd.DataFrame({"url":urls,"Prediction":preds,
+                                  "Legitimate_Prob":legit,"Phishing_Prob":phish})
             results["Status"]=results["Prediction"].map({0:"Legitimate",1:"Phishing"})
 
+            st.success("✅ Batch prediction complete")
             st.dataframe(results.head())
+
             csv=results.to_csv(index=False)
             st.download_button("📥 Download Results CSV", csv, "phishing_predictions.csv","text/csv")
 
@@ -811,4 +799,5 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
