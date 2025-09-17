@@ -496,7 +496,7 @@ import warnings
 from pathlib import Path
 import sys
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from multiprocessing import Process, Queue
 
 # -------------------------------------------------------------------
@@ -519,8 +519,6 @@ except ImportError as e:
         FEATURE_EXTRACTION_AVAILABLE = True
     except Exception as e2:
         st.warning(f"Feature extraction not available: {e}")
-        st.caption("Make sure feature.py is in the same directory as app.py and dependencies installed:")
-        st.code("pip install beautifulsoup4 requests python-whois googlesearch-python python-dateutil lxml")
         FEATURE_EXTRACTION_AVAILABLE = False
 
 warnings.filterwarnings("ignore")
@@ -568,25 +566,6 @@ model = load_model()
 scaler = load_scaler()
 
 # -------------------------------------------------------------------
-# Feature extraction wrapper
-# -------------------------------------------------------------------
-def extract_url_features(url):
-    if not FEATURE_EXTRACTION_AVAILABLE:
-        raise ImportError("Feature extraction not available")
-    extractor = FeatureExtraction(url)
-    features = extractor.getFeaturesList()
-    feature_names = [
-        'UsingIP','LongURL','ShortURL','Symbol@','Redirecting//',
-        'PrefixSuffix-','SubDomains','HTTPS','DomainRegLen','Favicon',
-        'NonStdPort','HTTPSDomainURL','RequestURL','AnchorURL','LinksInScriptTags',
-        'ServerFormHandler','InfoEmail','AbnormalURL','WebsiteForwarding',
-        'StatusBarCust','DisableRightClick','UsingPopupWindow','IframeRedirection',
-        'AgeofDomain','DNSRecording','WebsiteTraffic','PageRank','GoogleIndex',
-        'LinksPointingToPage','StatsReport'
-    ]
-    return pd.DataFrame([features], columns=feature_names), None
-
-# -------------------------------------------------------------------
 # Training feature names
 # -------------------------------------------------------------------
 def _resolve_expected(scaler):
@@ -605,30 +584,39 @@ def _resolve_expected(scaler):
 EXPECTED = _resolve_expected(scaler)
 
 # -------------------------------------------------------------------
-# Shared processor with timeout + diagnostics
+# Shared processor with timeout + normalization
 # -------------------------------------------------------------------
 def process_url(url, timeout=10):
+    """Extract features for a single URL with normalization and timeout."""
     if not str(url).startswith(("http://", "https://")):
         url = "https://" + str(url)
 
-    def _worker(u, q):
+    def _extract(u, q):
         try:
-            fdf, _ = extract_url_features(u)
-            feats = fdf.iloc[0].tolist()
+            extractor = FeatureExtraction(u)
+            feats = extractor.getFeaturesList()
             q.put((feats, None))
         except Exception as e:
-            q.put(([0] * len(EXPECTED), str(e)))
+            q.put(([0]*len(EXPECTED), str(e)))
 
     q = Queue()
-    p = Process(target=_worker, args=(url, q))
+    p = Process(target=_extract, args=(url, q))
     p.start()
     p.join(timeout)
     if p.is_alive():
         p.terminate()
-        return [0] * len(EXPECTED), f"Timed out after {timeout}s"
+        return [0]*len(EXPECTED), f"Timed out after {timeout}s"
     if not q.empty():
-        return q.get()
-    return [0] * len(EXPECTED), "Unknown error"
+        feats, err = q.get()
+        # Safeguard: match length to EXPECTED
+        if len(feats) != len(EXPECTED):
+            err = f"Length mismatch: got {len(feats)} features, expected {len(EXPECTED)}"
+            if len(feats) < len(EXPECTED):
+                feats.extend([0] * (len(EXPECTED)-len(feats)))
+            else:
+                feats = feats[:len(EXPECTED)]
+        return feats, err
+    return [0]*len(EXPECTED), "Unknown error"
 
 # -------------------------------------------------------------------
 # Sidebar
@@ -657,11 +645,13 @@ if input_method == "URL Analysis":
 
         st.subheader("🔍 Extracted Features")
         st.write(features_df)
+
         if all(v == 0 for v in feats):
             st.error("⚠️ All features are zero — model input invalid")
             if err:
                 st.warning(f"Reason: {err}")
 
+        # Predict
         X_scaled = scaler.transform(features_df)
         if hasattr(model, "predict_proba"):
             probs = model.predict_proba(X_scaled)
@@ -693,6 +683,7 @@ elif input_method == "Batch Prediction":
     if uploaded_file is not None:
         raw_bytes = uploaded_file.read()
         text = raw_bytes.decode(errors="ignore")
+
         urls = list(dict.fromkeys(URL_REGEX.findall(text)))
         if not urls:
             st.error("No valid URLs found in file"); st.stop()
@@ -706,7 +697,8 @@ elif input_method == "Batch Prediction":
             if not FEATURE_EXTRACTION_AVAILABLE:
                 st.error("Feature extraction not available"); st.stop()
 
-            all_features, errors = [], []
+            all_features = [None] * len(urls)
+            errors = [None] * len(urls)
             progress = st.progress(0)
             status = st.empty()
 
@@ -714,27 +706,28 @@ elif input_method == "Batch Prediction":
                 futures = {executor.submit(process_url, url, 10): idx for idx, url in enumerate(urls)}
                 completed = 0
                 for future in as_completed(futures):
+                    idx = futures[future]
                     feats, err = future.result()
-                    all_features.append(feats)
-                    errors.append(err)
+                    all_features[idx] = feats
+                    errors[idx] = err
                     completed += 1
                     status.text(f"Processed {completed}/{len(urls)} URLs")
                     progress.progress(completed/len(urls))
 
             progress.empty(); status.empty()
-
             features_df = pd.DataFrame(all_features, columns=EXPECTED)
+
             st.subheader("🔍 Extracted Features (first few)")
             st.write(features_df.head())
 
             zero_rows = features_df[(features_df == 0).all(axis=1)]
             if not zero_rows.empty:
+                bad_urls = [urls[i] for i, f in enumerate(all_features) if all(v==0 for v in f)]
+                bad_errs = [errors[i] for i, f in enumerate(all_features) if all(v==0 for v in f)]
                 st.error(f"{len(zero_rows)} URLs produced all-zero features")
-                st.dataframe(pd.DataFrame({
-                    "url": [urls[i] for i, f in enumerate(all_features) if all(v==0 for v in f)],
-                    "error": [errors[i] for i, f in enumerate(all_features) if all(v==0 for v in f)]
-                }))
+                st.dataframe(pd.DataFrame({"url": bad_urls, "error": bad_errs}))
 
+            # Predict
             X = scaler.transform(features_df)
             if hasattr(model,"predict_proba"):
                 probs = model.predict_proba(X)
@@ -758,15 +751,15 @@ elif input_method == "Batch Prediction":
             csv = results.to_csv(index=False)
             st.download_button("📥 Download Results CSV", csv, "phishing_predictions.csv","text/csv")
 
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------
 # Footer
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------
 st.markdown("---")
 st.markdown("Built by Group AJ 🎈 | Cybersecurity DLI Project")
 
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------
 # Additional Information Section
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------
 with st.sidebar:
     st.markdown("---")
     st.header("ℹ️ Information")
@@ -776,7 +769,6 @@ with st.sidebar:
         st.success("✅ Available")
     else:
         st.error("❌ Not Available")
-        st.caption("Make sure feature.py is in the correct location")
     
     st.markdown("**Model Status:**")
     if model is not None:
@@ -795,9 +787,6 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
-
-
-
 
 
 
