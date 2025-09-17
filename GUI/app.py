@@ -488,6 +488,7 @@
 
 # #
 
+
 # app.py — Streamlit UI for model.pkl + scaler.pkl with integrated feature extraction
 import streamlit as st
 import pandas as pd
@@ -671,7 +672,7 @@ if input_method == "URL Analysis":
         st.metric("Phishing Probability", f"{phish_prob:.2%}")
 
 # -------------------------------------------------------------------
-# Batch Prediction (regex-only, parallel, timeout)
+# Batch Prediction (regex-only, parallel, timeout handled in process_url)
 # -------------------------------------------------------------------
 elif input_method == "Batch Prediction":
     st.header("📊 Batch Prediction")
@@ -710,10 +711,7 @@ elif input_method == "Batch Prediction":
                 completed = 0
                 for future in as_completed(futures):
                     idx = futures[future]
-                    try:
-                        all_features[idx] = future.result(timeout=12)
-                    except TimeoutError:
-                        all_features[idx] = [0] * len(EXPECTED)
+                    all_features[idx] = future.result()  # process_url handles timeout
                     completed += 1
                     status.text(f"Processed {completed}/{len(urls)} URLs")
                     progress.progress(completed/len(urls))
@@ -743,7 +741,7 @@ elif input_method == "Batch Prediction":
 
             csv = results.to_csv(index=False)
             st.download_button("📥 Download Results CSV", csv, "phishing_predictions.csv","text/csv")
-
+            
 # -----------------------------------------------------------------------------
 # Footer
 # -----------------------------------------------------------------------------
@@ -781,6 +779,7 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
 
 
