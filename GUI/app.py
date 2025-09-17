@@ -485,7 +485,6 @@
 #         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
 #         if hasattr(scaler, "feature_names_in_"):
 #             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
-
 # #
 
 # app.py — Streamlit UI for model.pkl + scaler.pkl with integrated feature extraction
@@ -577,7 +576,7 @@ def extract_url_features(url):
     extractor = FeatureExtraction(url)
     features = extractor.getFeaturesList()
     feature_names = [
-        'Index','UsingIP','LongURL','ShortURL','Symbol@','Redirecting//',
+        'UsingIP','LongURL','ShortURL','Symbol@','Redirecting//',
         'PrefixSuffix-','SubDomains','HTTPS','DomainRegLen','Favicon',
         'NonStdPort','HTTPSDomainURL','RequestURL','AnchorURL','LinksInScriptTags',
         'ServerFormHandler','InfoEmail','AbnormalURL','WebsiteForwarding',
@@ -594,7 +593,7 @@ def _resolve_expected(scaler):
     if hasattr(scaler, "feature_names_in_"):
         return list(scaler.feature_names_in_)
     return [
-        'Index','UsingIP','LongURL','ShortURL','Symbol@','Redirecting//',
+        'UsingIP','LongURL','ShortURL','Symbol@','Redirecting//',
         'PrefixSuffix-','SubDomains','HTTPS','DomainRegLen','Favicon',
         'NonStdPort','HTTPSDomainURL','RequestURL','AnchorURL','LinksInScriptTags',
         'ServerFormHandler','InfoEmail','AbnormalURL','WebsiteForwarding',
@@ -796,6 +795,7 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
 
 
