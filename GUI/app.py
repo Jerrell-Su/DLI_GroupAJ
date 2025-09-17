@@ -609,12 +609,12 @@ EXPECTED = _resolve_expected(scaler)
 # Shared processor with timeout + normalization
 # -------------------------------------------------------------------
 def process_url(url, timeout=10):
-    """Extract features for a single URL with normalization and timeout."""
     if not str(url).startswith(("http://", "https://")):
         url = "https://" + str(url)
 
     def _extract(u):
         try:
+            # add timeout to requests inside feature.py if possible
             fdf, _ = extract_url_features(u)
             feats = fdf.iloc[0].tolist()
         except Exception:
@@ -625,12 +625,15 @@ def process_url(url, timeout=10):
             feats = feats[:len(EXPECTED)]
         return feats
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
+    # run in separate *process* instead of thread to allow kill on timeout
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_extract, url)
         try:
             return future.result(timeout=timeout)
         except TimeoutError:
             return [0] * len(EXPECTED)
+
 
 # -------------------------------------------------------------------
 # Sidebar
@@ -779,6 +782,7 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
 
 
