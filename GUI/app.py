@@ -488,7 +488,6 @@
 
 # #
 
-
 # app.py — Streamlit UI for model.pkl + scaler.pkl with integrated feature extraction
 import streamlit as st
 import pandas as pd
@@ -660,6 +659,15 @@ if input_method == "URL Analysis":
             feats = process_url(url_input, timeout=10)
             features_df = pd.DataFrame([feats], columns=EXPECTED)
 
+        # Debug info
+        st.subheader("🔧 Debug: Feature Alignment (Single URL)")
+        st.write("Extracted DataFrame shape:", features_df.shape)
+        st.write("First row of features:", features_df.iloc[0].to_dict())
+        if hasattr(scaler, "feature_names_in_"):
+            st.write("Scaler expects:", list(scaler.feature_names_in_))
+            st.write("Columns match exactly:", list(features_df.columns) == list(scaler.feature_names_in_))
+
+        # Predict
         X_scaled = scaler.transform(features_df)
         if hasattr(model, "predict_proba"):
             probs = model.predict_proba(X_scaled)
@@ -721,8 +729,17 @@ elif input_method == "Batch Prediction":
 
             progress.empty(); status.empty()
             features_df = pd.DataFrame(all_features, columns=EXPECTED)
-            X = scaler.transform(features_df)
 
+            # Debug info
+            st.subheader("🔧 Debug: Feature Alignment (Batch)")
+            st.write("Features DataFrame shape:", features_df.shape)
+            st.write("First row of features:", features_df.iloc[0].to_dict())
+            if hasattr(scaler, "feature_names_in_"):
+                st.write("Scaler expects:", list(scaler.feature_names_in_))
+                st.write("Columns match exactly:", list(features_df.columns) == list(scaler.feature_names_in_))
+
+            # Predict
+            X = scaler.transform(features_df)
             if hasattr(model,"predict_proba"):
                 probs = model.predict_proba(X)
                 preds = np.argmax(probs, axis=1)
@@ -744,6 +761,7 @@ elif input_method == "Batch Prediction":
 
             csv = results.to_csv(index=False)
             st.download_button("📥 Download Results CSV", csv, "phishing_predictions.csv","text/csv")
+
 # -----------------------------------------------------------------------------
 # Footer
 # -----------------------------------------------------------------------------
@@ -781,6 +799,7 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
 
 
