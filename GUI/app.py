@@ -498,7 +498,8 @@ import warnings
 from pathlib import Path
 import sys
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+from multiprocessing import Process, Queue
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # -------------------------------------------------------------------
 # Import feature extractor
@@ -606,34 +607,33 @@ def _resolve_expected(scaler):
 EXPECTED = _resolve_expected(scaler)
 
 # -------------------------------------------------------------------
-# Shared processor with timeout + normalization
+# Robust process-based feature extractor
 # -------------------------------------------------------------------
+def _worker_extract(u, q):
+    try:
+        fdf, _ = extract_url_features(u)
+        feats = fdf.iloc[0].tolist()
+    except Exception:
+        feats = [0] * len(EXPECTED)
+    if len(feats) < len(EXPECTED):
+        feats.extend([0] * (len(EXPECTED) - len(feats)))
+    elif len(feats) > len(EXPECTED):
+        feats = feats[:len(EXPECTED)]
+    q.put(feats)
+
 def process_url(url, timeout=10):
     if not str(url).startswith(("http://", "https://")):
         url = "https://" + str(url)
-
-    def _extract(u):
-        try:
-            # add timeout to requests inside feature.py if possible
-            fdf, _ = extract_url_features(u)
-            feats = fdf.iloc[0].tolist()
-        except Exception:
-            feats = [0] * len(EXPECTED)
-        if len(feats) < len(EXPECTED):
-            feats.extend([0] * (len(EXPECTED) - len(feats)))
-        elif len(feats) > len(EXPECTED):
-            feats = feats[:len(EXPECTED)]
-        return feats
-
-    # run in separate *process* instead of thread to allow kill on timeout
-    from concurrent.futures import ProcessPoolExecutor
-    with ProcessPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_extract, url)
-        try:
-            return future.result(timeout=timeout)
-        except TimeoutError:
-            return [0] * len(EXPECTED)
-
+    q = Queue()
+    p = Process(target=_worker_extract, args=(url, q))
+    p.start()
+    p.join(timeout)
+    if p.is_alive():
+        p.terminate()
+        return [0] * len(EXPECTED)
+    if not q.empty():
+        return q.get()
+    return [0] * len(EXPECTED)
 
 # -------------------------------------------------------------------
 # Sidebar
@@ -642,7 +642,7 @@ st.sidebar.header("Input Method")
 input_method = st.sidebar.radio("Choose input method:", ["URL Analysis", "Batch Prediction"])
 
 # -------------------------------------------------------------------
-# Single URL Analysis (uses same processor)
+# Single URL Analysis
 # -------------------------------------------------------------------
 if input_method == "URL Analysis":
     st.header("🔍 Single URL Analysis")
@@ -675,7 +675,7 @@ if input_method == "URL Analysis":
         st.metric("Phishing Probability", f"{phish_prob:.2%}")
 
 # -------------------------------------------------------------------
-# Batch Prediction (regex-only, parallel, timeout handled in process_url)
+# Batch Prediction
 # -------------------------------------------------------------------
 elif input_method == "Batch Prediction":
     st.header("📊 Batch Prediction")
@@ -714,7 +714,7 @@ elif input_method == "Batch Prediction":
                 completed = 0
                 for future in as_completed(futures):
                     idx = futures[future]
-                    all_features[idx] = future.result()  # process_url handles timeout
+                    all_features[idx] = future.result()
                     completed += 1
                     status.text(f"Processed {completed}/{len(urls)} URLs")
                     progress.progress(completed/len(urls))
@@ -744,7 +744,6 @@ elif input_method == "Batch Prediction":
 
             csv = results.to_csv(index=False)
             st.download_button("📥 Download Results CSV", csv, "phishing_predictions.csv","text/csv")
-            
 # -----------------------------------------------------------------------------
 # Footer
 # -----------------------------------------------------------------------------
@@ -782,6 +781,7 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
 
 
