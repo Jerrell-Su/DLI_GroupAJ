@@ -660,7 +660,7 @@ if input_method == "URL Analysis":
         st.metric("Phishing Probability", f"{phish_prob:.2%}")
 
 # -------------------------------------------------------------------
-# Batch Prediction (universal URL extractor)
+# Batch Prediction (regex-only, consistent length)
 # -------------------------------------------------------------------
 elif input_method == "Batch Prediction":
     st.header("📊 Batch Prediction")
@@ -668,45 +668,18 @@ elif input_method == "Batch Prediction":
 
     uploaded_file = st.file_uploader("Upload file")
 
-    URL_REGEX = re.compile(r'(https?://[^\s]+|www\.[^\s]+)', re.IGNORECASE)
-
-    def extract_urls_from_any(df_or_text):
-        urls = []
-        if isinstance(df_or_text, pd.DataFrame):
-            for row in df_or_text.itertuples(index=False):
-                for cell in row:
-                    if isinstance(cell, str):
-                        urls.extend(URL_REGEX.findall(cell))
-        elif isinstance(df_or_text, str):
-            urls.extend(URL_REGEX.findall(df_or_text))
-        return list(dict.fromkeys(urls))  # dedupe
+    URL_REGEX = re.compile(
+        r'((?:https?://|http://|www\.)[^\s]+|[a-zA-Z0-9\-\.]+\.[a-z]{2,}(?:[^\s]*)?)',
+        re.IGNORECASE
+    )
 
     if uploaded_file is not None:
-        suffix = Path(uploaded_file.name).suffix.lower()
+        # Read entire file as raw text
         raw_bytes = uploaded_file.read()
-        uploaded_file.seek(0)
+        text = raw_bytes.decode(errors="ignore")
 
-        urls = []
-        try:
-            if suffix in {".csv",".tsv",".txt",".log"}:
-                try:
-                    df = pd.read_csv(uploaded_file, sep=None, engine="python", header=None)
-                    urls = extract_urls_from_any(df)
-                except Exception:
-                    text = raw_bytes.decode(errors="ignore")
-                    urls = extract_urls_from_any(text)
-            elif suffix in {".xlsx",".xls"}:
-                df = pd.read_excel(uploaded_file, header=None)
-                urls = extract_urls_from_any(df)
-            elif suffix==".json":
-                df = pd.read_json(uploaded_file)
-                urls = extract_urls_from_any(df)
-            else:
-                text = raw_bytes.decode(errors="ignore")
-                urls = extract_urls_from_any(text)
-        except Exception as e:
-            st.error(f"Could not parse file: {e}")
-            st.stop()
+        # Extract URLs with regex
+        urls = list(dict.fromkeys(URL_REGEX.findall(text)))  # dedupe, preserve order
 
         if not urls:
             st.error("No valid URLs found in file")
@@ -721,45 +694,57 @@ elif input_method == "Batch Prediction":
             if not FEATURE_EXTRACTION_AVAILABLE:
                 st.error("Feature extraction not available"); st.stop()
 
-            all_features=[]
-            failed=[]
-            progress=st.progress(0)
-            status=st.empty()
+            all_features = []
+            failed = []
+            progress = st.progress(0)
+            status = st.empty()
 
-            for i,url in enumerate(urls):
+            for i, url in enumerate(urls):
                 status.text(f"Processing {i+1}/{len(urls)}: {url[:60]}")
                 if not str(url).startswith(("http://","https://")):
-                    url="https://"+str(url)
+                    url = "https://" + str(url)
                 try:
-                    fdf,_=extract_url_features(url)
-                    feats=fdf.iloc[0].tolist()
+                    fdf, _ = extract_url_features(url)
+                    feats = fdf.iloc[0].tolist()
                 except Exception:
-                    feats=[0]*len(EXPECTED)
+                    feats = [0] * len(EXPECTED)
                     failed.append(url)
+
+                # Normalize length
+                if len(feats) < len(EXPECTED):
+                    feats.extend([0] * (len(EXPECTED) - len(feats)))
+                elif len(feats) > len(EXPECTED):
+                    feats = feats[:len(EXPECTED)]
+
                 all_features.append(feats)
                 progress.progress((i+1)/len(urls))
 
-            progress.empty(); status.empty()
+            progress.empty()
+            status.empty()
 
-            features_df=pd.DataFrame(all_features,columns=EXPECTED)
-            X=scaler.transform(features_df)
+            features_df = pd.DataFrame(all_features, columns=EXPECTED)
+            X = scaler.transform(features_df)
 
             if hasattr(model,"predict_proba"):
-                probs=model.predict_proba(X)
-                preds=np.argmax(probs,axis=1)
-                legit,phish=probs[:,0],probs[:,1]
+                probs = model.predict_proba(X)
+                preds = np.argmax(probs, axis=1)
+                legit, phish = probs[:,0], probs[:,1]
             else:
-                preds=model.predict(X)
-                phish=preds.astype(float); legit=1.0-phish
+                preds = model.predict(X)
+                phish = preds.astype(float); legit = 1.0 - phish
 
-            results=pd.DataFrame({"url":urls,"Prediction":preds,
-                                  "Legitimate_Prob":legit,"Phishing_Prob":phish})
-            results["Status"]=results["Prediction"].map({0:"Legitimate",1:"Phishing"})
+            results = pd.DataFrame({
+                "url": urls,
+                "Prediction": preds,
+                "Legitimate_Prob": legit,
+                "Phishing_Prob": phish
+            })
+            results["Status"] = results["Prediction"].map({0:"Legitimate",1:"Phishing"})
 
             st.success("✅ Batch prediction complete")
             st.dataframe(results.head())
 
-            csv=results.to_csv(index=False)
+            csv = results.to_csv(index=False)
             st.download_button("📥 Download Results CSV", csv, "phishing_predictions.csv","text/csv")
 
 # -----------------------------------------------------------------------------
@@ -799,5 +784,6 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
 
