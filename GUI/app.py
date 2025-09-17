@@ -497,7 +497,7 @@ import warnings
 from pathlib import Path
 import sys
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 
 # -------------------------------------------------------------------
 # Import feature extractor
@@ -605,13 +605,40 @@ def _resolve_expected(scaler):
 EXPECTED = _resolve_expected(scaler)
 
 # -------------------------------------------------------------------
+# Shared processor with timeout + normalization
+# -------------------------------------------------------------------
+def process_url(url, timeout=10):
+    """Extract features for a single URL with normalization and timeout."""
+    if not str(url).startswith(("http://", "https://")):
+        url = "https://" + str(url)
+
+    def _extract(u):
+        try:
+            fdf, _ = extract_url_features(u)
+            feats = fdf.iloc[0].tolist()
+        except Exception:
+            feats = [0] * len(EXPECTED)
+        if len(feats) < len(EXPECTED):
+            feats.extend([0] * (len(EXPECTED) - len(feats)))
+        elif len(feats) > len(EXPECTED):
+            feats = feats[:len(EXPECTED)]
+        return feats
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_extract, url)
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            return [0] * len(EXPECTED)
+
+# -------------------------------------------------------------------
 # Sidebar
 # -------------------------------------------------------------------
 st.sidebar.header("Input Method")
 input_method = st.sidebar.radio("Choose input method:", ["URL Analysis", "Batch Prediction"])
 
 # -------------------------------------------------------------------
-# Single URL Analysis
+# Single URL Analysis (uses same processor)
 # -------------------------------------------------------------------
 if input_method == "URL Analysis":
     st.header("🔍 Single URL Analysis")
@@ -619,41 +646,24 @@ if input_method == "URL Analysis":
 
     if st.button("🔍 Analyze URL", type="primary"):
         if not url_input:
-            st.error("Please enter a URL")
-            st.stop()
+            st.error("Please enter a URL"); st.stop()
         if model is None or scaler is None:
-            st.error("Model or scaler not loaded")
-            st.stop()
+            st.error("Model or scaler not loaded"); st.stop()
         if not FEATURE_EXTRACTION_AVAILABLE:
-            st.error("Feature extraction not available")
-            st.stop()
+            st.error("Feature extraction not available"); st.stop()
 
-        if not url_input.startswith(("http://","https://")):
-            url_input = "https://" + url_input
+        with st.spinner("Extracting features..."):
+            feats = process_url(url_input, timeout=10)
+            features_df = pd.DataFrame([feats], columns=EXPECTED)
 
-        features_df, error = extract_url_features(url_input)
-        if error or features_df is None:
-            st.error(f"Feature extraction failed: {error}")
-            st.stop()
-
-        # Adjust feature set length
-        vals = features_df.iloc[0].tolist()
-        if len(vals) < len(EXPECTED):
-            vals.extend([0]*(len(EXPECTED)-len(vals)))
-        elif len(vals) > len(EXPECTED):
-            vals = vals[:len(EXPECTED)]
-        features_df = pd.DataFrame([vals], columns=EXPECTED)
-
-        # Scale + predict
-        X_scaled = scaler.transform(features_df.values)
+        X_scaled = scaler.transform(features_df)
         if hasattr(model, "predict_proba"):
             probs = model.predict_proba(X_scaled)
             pred = np.argmax(probs, axis=1)[0]
             legit_prob, phish_prob = probs[0][0], probs[0][1]
         else:
             pred = model.predict(X_scaled)[0]
-            phish_prob = float(pred)
-            legit_prob = 1.0 - phish_prob
+            phish_prob = float(pred); legit_prob = 1.0 - phish_prob
 
         status = "🔴 Phishing" if pred==1 else "🟢 Legitimate"
         st.metric("Status", status)
@@ -661,10 +671,7 @@ if input_method == "URL Analysis":
         st.metric("Phishing Probability", f"{phish_prob:.2%}")
 
 # -------------------------------------------------------------------
-# Batch Prediction (regex-only, consistent length)
-# -------------------------------------------------------------------
-# -------------------------------------------------------------------
-# Batch Prediction (regex-only, parallelized feature extraction)
+# Batch Prediction (regex-only, parallel, timeout)
 # -------------------------------------------------------------------
 elif input_method == "Batch Prediction":
     st.header("📊 Batch Prediction")
@@ -678,16 +685,12 @@ elif input_method == "Batch Prediction":
     )
 
     if uploaded_file is not None:
-        # Read entire file as raw text
         raw_bytes = uploaded_file.read()
         text = raw_bytes.decode(errors="ignore")
 
-        # Extract URLs with regex
-        urls = list(dict.fromkeys(URL_REGEX.findall(text)))  # dedupe, preserve order
-
+        urls = list(dict.fromkeys(URL_REGEX.findall(text)))
         if not urls:
-            st.error("No valid URLs found in file")
-            st.stop()
+            st.error("No valid URLs found in file"); st.stop()
 
         st.success(f"Found {len(urls)} URLs in file")
         st.dataframe(pd.DataFrame({"url": urls}).head())
@@ -698,43 +701,24 @@ elif input_method == "Batch Prediction":
             if not FEATURE_EXTRACTION_AVAILABLE:
                 st.error("Feature extraction not available"); st.stop()
 
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-
-            def process_url(url):
-                """Extract features for a single URL with normalization."""
-                if not str(url).startswith(("http://","https://")):
-                    url = "https://" + str(url)
-                try:
-                    fdf, _ = extract_url_features(url)
-                    feats = fdf.iloc[0].tolist()
-                except Exception:
-                    feats = [0] * len(EXPECTED)
-
-                # Normalize length
-                if len(feats) < len(EXPECTED):
-                    feats.extend([0] * (len(EXPECTED) - len(feats)))
-                elif len(feats) > len(EXPECTED):
-                    feats = feats[:len(EXPECTED)]
-                return feats
-
             all_features = [None] * len(urls)
             progress = st.progress(0)
             status = st.empty()
 
-            # Run in parallel (adjust workers to your environment)
             with ThreadPoolExecutor(max_workers=8) as executor:
-                futures = {executor.submit(process_url, url): idx for idx, url in enumerate(urls)}
+                futures = {executor.submit(process_url, url, 10): idx for idx, url in enumerate(urls)}
                 completed = 0
                 for future in as_completed(futures):
                     idx = futures[future]
-                    all_features[idx] = future.result()
+                    try:
+                        all_features[idx] = future.result(timeout=12)
+                    except TimeoutError:
+                        all_features[idx] = [0] * len(EXPECTED)
                     completed += 1
                     status.text(f"Processed {completed}/{len(urls)} URLs")
                     progress.progress(completed/len(urls))
 
-            progress.empty()
-            status.empty()
-
+            progress.empty(); status.empty()
             features_df = pd.DataFrame(all_features, columns=EXPECTED)
             X = scaler.transform(features_df)
 
@@ -797,6 +781,7 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
 
 
