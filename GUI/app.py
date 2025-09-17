@@ -497,8 +497,8 @@ import warnings
 from pathlib import Path
 import sys
 import re
-from multiprocessing import Process, Queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import Process, Queue
 
 # -------------------------------------------------------------------
 # Import feature extractor
@@ -577,12 +577,13 @@ def extract_url_features(url):
     extractor = FeatureExtraction(url)
     features = extractor.getFeaturesList()
     feature_names = [
-        'UsingIp', 'longUrl', 'shortUrl', 'symbol', 'redirecting',
-        'prefixSuffix', 'SubDomains', 'Hppts', 'DomainRegLen', 'Favicon',
-        'NonStdPort', 'HTTPSDomainURL', 'RequestURL', 'AnchorURL', 'LinksInScriptTags',
-        'ServerFormHandler', 'InfoEmail', 'AbnormalURL', 'WebsiteForwarding', 'StatusBarCust',
-        'DisableRightClick', 'UsingPopupWindow', 'IframeRedirection', 'AgeofDomain', 'DNSRecording',
-        'WebsiteTraffic', 'PageRank', 'GoogleIndex', 'LinksPointingToPage', 'StatsReport'
+        'Index','UsingIP','LongURL','ShortURL','Symbol@','Redirecting//',
+        'PrefixSuffix-','SubDomains','HTTPS','DomainRegLen','Favicon',
+        'NonStdPort','HTTPSDomainURL','RequestURL','AnchorURL','LinksInScriptTags',
+        'ServerFormHandler','InfoEmail','AbnormalURL','WebsiteForwarding',
+        'StatusBarCust','DisableRightClick','UsingPopupWindow','IframeRedirection',
+        'AgeofDomain','DNSRecording','WebsiteTraffic','PageRank','GoogleIndex',
+        'LinksPointingToPage','StatsReport'
     ]
     return pd.DataFrame([features], columns=feature_names), None
 
@@ -593,46 +594,42 @@ def _resolve_expected(scaler):
     if hasattr(scaler, "feature_names_in_"):
         return list(scaler.feature_names_in_)
     return [
-        "url_length","domain_age","subdomain_count","special_chars",
-        "https_usage","google_index","page_rank","domain_registration_length",
-        "suspicious_keywords","dots_count","hyphens_count","underscores_count",
-        "slashes_count","question_marks","equal_signs","at_symbols",
-        "ampersands","percent_signs","hash_signs","digits_count",
-        "letters_count","alexa_rank","domain_trust","ssl_certificate",
-        "redirects_count","page_load_time","has_forms","hidden_elements",
-        "external_links_ratio","image_text_ratio"
+        'Index','UsingIP','LongURL','ShortURL','Symbol@','Redirecting//',
+        'PrefixSuffix-','SubDomains','HTTPS','DomainRegLen','Favicon',
+        'NonStdPort','HTTPSDomainURL','RequestURL','AnchorURL','LinksInScriptTags',
+        'ServerFormHandler','InfoEmail','AbnormalURL','WebsiteForwarding',
+        'StatusBarCust','DisableRightClick','UsingPopupWindow','IframeRedirection',
+        'AgeofDomain','DNSRecording','WebsiteTraffic','PageRank','GoogleIndex',
+        'LinksPointingToPage','StatsReport'
     ]
 
 EXPECTED = _resolve_expected(scaler)
 
 # -------------------------------------------------------------------
-# Robust process-based feature extractor
+# Shared processor with timeout + diagnostics
 # -------------------------------------------------------------------
-def _worker_extract(u, q):
-    try:
-        fdf, _ = extract_url_features(u)
-        feats = fdf.iloc[0].tolist()
-    except Exception:
-        feats = [0] * len(EXPECTED)
-    if len(feats) < len(EXPECTED):
-        feats.extend([0] * (len(EXPECTED) - len(feats)))
-    elif len(feats) > len(EXPECTED):
-        feats = feats[:len(EXPECTED)]
-    q.put(feats)
-
 def process_url(url, timeout=10):
     if not str(url).startswith(("http://", "https://")):
         url = "https://" + str(url)
+
+    def _worker(u, q):
+        try:
+            fdf, _ = extract_url_features(u)
+            feats = fdf.iloc[0].tolist()
+            q.put((feats, None))
+        except Exception as e:
+            q.put(([0] * len(EXPECTED), str(e)))
+
     q = Queue()
-    p = Process(target=_worker_extract, args=(url, q))
+    p = Process(target=_worker, args=(url, q))
     p.start()
     p.join(timeout)
     if p.is_alive():
         p.terminate()
-        return [0] * len(EXPECTED)
+        return [0] * len(EXPECTED), f"Timed out after {timeout}s"
     if not q.empty():
         return q.get()
-    return [0] * len(EXPECTED)
+    return [0] * len(EXPECTED), "Unknown error"
 
 # -------------------------------------------------------------------
 # Sidebar
@@ -656,18 +653,16 @@ if input_method == "URL Analysis":
             st.error("Feature extraction not available"); st.stop()
 
         with st.spinner("Extracting features..."):
-            feats = process_url(url_input, timeout=10)
+            feats, err = process_url(url_input, timeout=10)
             features_df = pd.DataFrame([feats], columns=EXPECTED)
 
-        # Debug info
-        st.subheader("🔧 Debug: Feature Alignment (Single URL)")
-        st.write("Extracted DataFrame shape:", features_df.shape)
-        st.write("First row of features:", features_df.iloc[0].to_dict())
-        if hasattr(scaler, "feature_names_in_"):
-            st.write("Scaler expects:", list(scaler.feature_names_in_))
-            st.write("Columns match exactly:", list(features_df.columns) == list(scaler.feature_names_in_))
+        st.subheader("🔍 Extracted Features")
+        st.write(features_df)
+        if all(v == 0 for v in feats):
+            st.error("⚠️ All features are zero — model input invalid")
+            if err:
+                st.warning(f"Reason: {err}")
 
-        # Predict
         X_scaled = scaler.transform(features_df)
         if hasattr(model, "predict_proba"):
             probs = model.predict_proba(X_scaled)
@@ -699,7 +694,6 @@ elif input_method == "Batch Prediction":
     if uploaded_file is not None:
         raw_bytes = uploaded_file.read()
         text = raw_bytes.decode(errors="ignore")
-
         urls = list(dict.fromkeys(URL_REGEX.findall(text)))
         if not urls:
             st.error("No valid URLs found in file"); st.stop()
@@ -713,7 +707,7 @@ elif input_method == "Batch Prediction":
             if not FEATURE_EXTRACTION_AVAILABLE:
                 st.error("Feature extraction not available"); st.stop()
 
-            all_features = [None] * len(urls)
+            all_features, errors = [], []
             progress = st.progress(0)
             status = st.empty()
 
@@ -721,24 +715,27 @@ elif input_method == "Batch Prediction":
                 futures = {executor.submit(process_url, url, 10): idx for idx, url in enumerate(urls)}
                 completed = 0
                 for future in as_completed(futures):
-                    idx = futures[future]
-                    all_features[idx] = future.result()
+                    feats, err = future.result()
+                    all_features.append(feats)
+                    errors.append(err)
                     completed += 1
                     status.text(f"Processed {completed}/{len(urls)} URLs")
                     progress.progress(completed/len(urls))
 
             progress.empty(); status.empty()
+
             features_df = pd.DataFrame(all_features, columns=EXPECTED)
+            st.subheader("🔍 Extracted Features (first few)")
+            st.write(features_df.head())
 
-            # Debug info
-            st.subheader("🔧 Debug: Feature Alignment (Batch)")
-            st.write("Features DataFrame shape:", features_df.shape)
-            st.write("First row of features:", features_df.iloc[0].to_dict())
-            if hasattr(scaler, "feature_names_in_"):
-                st.write("Scaler expects:", list(scaler.feature_names_in_))
-                st.write("Columns match exactly:", list(features_df.columns) == list(scaler.feature_names_in_))
+            zero_rows = features_df[(features_df == 0).all(axis=1)]
+            if not zero_rows.empty:
+                st.error(f"{len(zero_rows)} URLs produced all-zero features")
+                st.dataframe(pd.DataFrame({
+                    "url": [urls[i] for i, f in enumerate(all_features) if all(v==0 for v in f)],
+                    "error": [errors[i] for i, f in enumerate(all_features) if all(v==0 for v in f)]
+                }))
 
-            # Predict
             X = scaler.transform(features_df)
             if hasattr(model,"predict_proba"):
                 probs = model.predict_proba(X)
@@ -799,6 +796,7 @@ with st.sidebar:
         st.markdown(f"**Feature Extraction Available:** {FEATURE_EXTRACTION_AVAILABLE}")
         if hasattr(scaler, "feature_names_in_"):
             st.markdown(f"**Scaler Features:** {len(scaler.feature_names_in_)}")
+
 
 
 
